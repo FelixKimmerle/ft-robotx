@@ -1,5 +1,9 @@
 # ft-robotx-online
 
+<p align="center">
+  <img src="images/robo-tx-controller.jpg" alt="Rendered image of a ROBO TX Controller" width="280">
+</p>
+
 Control the **fischertechnik ROBO TX Controller** from a PC in **online mode**: your program runs on the PC, and
 the TX acts as its I/O module. It reads the inputs and counters and drives the motors and outputs of the master
 and up to eight extension controllers, over **USB or Bluetooth**.
