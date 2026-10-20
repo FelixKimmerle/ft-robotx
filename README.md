@@ -181,6 +181,10 @@ cd cs/examples/ButtonLamp && dotnet run -- /dev/ttyACM0
 
 A test tool in the spirit of fischertechnik's *RoboTxTest*, for checking wiring, sensors and motors quickly.
 
+<p align="center">
+  <img src="images/ftrobotx_gui_screenshot.png" alt="Screenshot of ftrobotx_gui connected to a ROBO TX Controller: universal inputs and counters on the left, motors and outputs on the right" width="800">
+</p>
+
 ```bash
 ./build/ftrobotx_gui                            # choose port and number of extensions, then Connect
 ./build/ftrobotx_gui /dev/ttyACM0 1             # connect right away: master and 1 extension
