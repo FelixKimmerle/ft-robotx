@@ -184,7 +184,8 @@ int connectBluetooth(std::string_view mac)
     std::optional<std::array<std::uint8_t, 6>> address = parseMac(mac);
     if (!address)
     {
-        throw std::invalid_argument("Invalid Bluetooth address \"" + std::string(mac) + "\", expected bt:XX:XX:XX:XX:XX:XX");
+        throw std::invalid_argument("Invalid Bluetooth address \"" + std::string(mac) +
+                                    "\", expected bt:XX:XX:XX:XX:XX:XX");
     }
 
     int fd = ::socket(AF_BLUETOOTH, SOCK_STREAM | SOCK_CLOEXEC, kBtProtoRfcomm);

@@ -44,7 +44,8 @@ int main(int argc, char* argv[])
         {
             const Extension& extension = ft.extension(index);
             std::cout << toString(index) << ": " << extension.name << ' '
-                      << (extension.version ? extension.version->toString() : "") << ' ' << extension.macAddress << '\n';
+                      << (extension.version ? extension.version->toString() : "") << ' ' << extension.macAddress
+                      << '\n';
         }
         std::cout << "Master button -> extension lamp, extension button -> master lamp. Press Ctrl+C to quit.\n";
 

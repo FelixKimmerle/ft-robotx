@@ -172,8 +172,8 @@ std::vector<SerialPort::PortInfo> SerialPort::listPorts()
     for (const char* name = buffer.data(); *name != '\0'; name += std::strlen(name) + 1)
     {
         std::string_view device(name);
-        if (device.size() > 3 && device.starts_with("COM")
-            && std::ranges::all_of(device.substr(3), [](char c) { return c >= '0' && c <= '9'; }))
+        if (device.size() > 3 && device.starts_with("COM") &&
+            std::ranges::all_of(device.substr(3), [](char c) { return c >= '0' && c <= '9'; }))
         {
             // Paired Bluetooth controllers appear as COM ports too.
             ports.push_back({std::string(device), "Serial port"});

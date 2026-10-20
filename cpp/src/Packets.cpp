@@ -11,8 +11,7 @@ namespace ftrobotx
 namespace
 {
 
-template <typename T>
-T readLE(std::span<const std::uint8_t> bytes, std::size_t offset)
+template <typename T> T readLE(std::span<const std::uint8_t> bytes, std::size_t offset)
 {
     if (offset + sizeof(T) > bytes.size())
     {
@@ -26,8 +25,7 @@ T readLE(std::span<const std::uint8_t> bytes, std::size_t offset)
     return static_cast<T>(value);
 }
 
-template <typename T>
-T read(std::span<const std::uint8_t> bytes, std::size_t& offset)
+template <typename T> T read(std::span<const std::uint8_t> bytes, std::size_t& offset)
 {
     T value = readLE<T>(bytes, offset);
     offset += sizeof(T);

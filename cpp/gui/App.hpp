@@ -12,13 +12,13 @@
 /// The test tool's user interface: connection bar plus one dockable window per controller.
 class App
 {
-public:
+  public:
     /// Connects right away if a port is given.
     App(std::string port, int numExtensions);
 
     void draw();
 
-private:
+  private:
     enum class Layout
     {
         None,

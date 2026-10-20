@@ -358,8 +358,7 @@ void App::drawController(std::size_t index, ftrobotx::Extension& extension)
     if (index > 0 && extension.macAddress.empty())
     {
         ImGui::TextColored(kYellow,
-                           "The master reports no info for this extension. Is it connected and set to EXT %zu?",
-                           index);
+                           "The master reports no info for this extension. Is it connected and set to EXT %zu?", index);
     }
 
     bool outputChanged = false;
@@ -530,7 +529,6 @@ void App::drawOutputs(ftrobotx::Extension& extension, bool& outputChanged, bool&
         std::int16_t& second = output.pwmOutputValues[2 * m + 1];
         bool motorMode = extension.config.motorConfig(m) != 0;
 
-
         char title[32];
         std::snprintf(title, sizeof(title), "M%zu  /  O%zu, O%zu", m + 1, 2 * m + 1, 2 * m + 2);
         ImGui::SeparatorText(title);
@@ -552,7 +550,8 @@ void App::drawOutputs(ftrobotx::Extension& extension, bool& outputChanged, bool&
         if (motorMode)
         {
             int speed = first - second;
-            ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Stop").x - style.ItemSpacing.x * 2 - style.FramePadding.x * 2);
+            ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Stop").x - style.ItemSpacing.x * 2 -
+                                    style.FramePadding.x * 2);
             if (ImGui::SliderInt("##speed", &speed, -512, 512, "%d"))
             {
                 first = static_cast<std::int16_t>(std::max(speed, 0));

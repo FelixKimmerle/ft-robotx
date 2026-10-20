@@ -18,13 +18,22 @@ class Response;
 /// Serial connection to a fischertechnik ROBO TX Controller and its extensions.
 class FtConnection
 {
-public:
+  public:
     explicit FtConnection(const std::string& portName, std::size_t numExtensions = 1,
                           std::chrono::milliseconds timeout = std::chrono::milliseconds(1000));
 
-    [[nodiscard]] std::span<Extension> extensions() { return extensions_; }
-    [[nodiscard]] std::span<const Extension> extensions() const { return extensions_; }
-    [[nodiscard]] Extension& extension(ExtensionIndex index) { return extensions_.at(static_cast<std::size_t>(index)); }
+    [[nodiscard]] std::span<Extension> extensions()
+    {
+        return extensions_;
+    }
+    [[nodiscard]] std::span<const Extension> extensions() const
+    {
+        return extensions_;
+    }
+    [[nodiscard]] Extension& extension(ExtensionIndex index)
+    {
+        return extensions_.at(static_cast<std::size_t>(index));
+    }
 
     void setPwmOutput(ExtensionIndex index, PWM pwm, std::int16_t duty);
     void setMotorOutput(ExtensionIndex index, Motor motor, std::int16_t duty);
@@ -45,7 +54,7 @@ public:
     /// extensions.
     void update();
 
-private:
+  private:
     void sendConfig();
     void sendPacket(Packet& packet, Response& response);
 

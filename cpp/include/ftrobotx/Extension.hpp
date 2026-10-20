@@ -103,28 +103,37 @@ struct FirmwareVersion
 
 class Config
 {
-public:
+  public:
     Config()
     {
         motorConfig_.fill(1);
         counterConfig_.fill(1);
     }
 
-    [[nodiscard]] UniversalInputConfig universalInputConfig(std::size_t index) const { return universalInputConfigs_.at(index); }
+    [[nodiscard]] UniversalInputConfig universalInputConfig(std::size_t index) const
+    {
+        return universalInputConfigs_.at(index);
+    }
     void setUniversalInputConfig(std::size_t index, UniversalInputConfig value)
     {
         universalInputConfigs_.at(index) = value;
         changed = true;
     }
 
-    [[nodiscard]] std::uint8_t motorConfig(std::size_t index) const { return motorConfig_.at(index); }
+    [[nodiscard]] std::uint8_t motorConfig(std::size_t index) const
+    {
+        return motorConfig_.at(index);
+    }
     void setMotorConfig(std::size_t index, std::uint8_t value)
     {
         motorConfig_.at(index) = value;
         changed = true;
     }
 
-    [[nodiscard]] std::uint8_t counterConfig(std::size_t index) const { return counterConfig_.at(index); }
+    [[nodiscard]] std::uint8_t counterConfig(std::size_t index) const
+    {
+        return counterConfig_.at(index);
+    }
     void setCounterConfig(std::size_t index, std::uint8_t value)
     {
         counterConfig_.at(index) = value;
@@ -133,7 +142,7 @@ public:
 
     bool changed = true;
 
-private:
+  private:
     std::array<UniversalInputConfig, kUniversalInputs> universalInputConfigs_{};
     std::array<std::uint8_t, kMotors> motorConfig_{};
     std::array<std::uint8_t, kMotors> counterConfig_{};
@@ -141,34 +150,75 @@ private:
 
 class Input
 {
-public:
-    [[nodiscard]] std::uint16_t universalInput(std::size_t index) const { return universalInputs_.at(index); }
-    void setUniversalInput(std::size_t index, std::uint16_t value) { set(universalInputs_.at(index), value); }
+  public:
+    [[nodiscard]] std::uint16_t universalInput(std::size_t index) const
+    {
+        return universalInputs_.at(index);
+    }
+    void setUniversalInput(std::size_t index, std::uint16_t value)
+    {
+        set(universalInputs_.at(index), value);
+    }
 
-    [[nodiscard]] std::uint8_t counterInput(std::size_t index) const { return counterInputs_.at(index); }
-    void setCounterInput(std::size_t index, std::uint8_t value) { set(counterInputs_.at(index), value); }
+    [[nodiscard]] std::uint8_t counterInput(std::size_t index) const
+    {
+        return counterInputs_.at(index);
+    }
+    void setCounterInput(std::size_t index, std::uint8_t value)
+    {
+        set(counterInputs_.at(index), value);
+    }
 
-    [[nodiscard]] std::uint16_t counterValue(std::size_t index) const { return counterValues_.at(index); }
-    void setCounterValue(std::size_t index, std::uint16_t value) { set(counterValues_.at(index), value); }
+    [[nodiscard]] std::uint16_t counterValue(std::size_t index) const
+    {
+        return counterValues_.at(index);
+    }
+    void setCounterValue(std::size_t index, std::uint16_t value)
+    {
+        set(counterValues_.at(index), value);
+    }
 
-    [[nodiscard]] std::uint16_t displayButtonLeft() const { return displayButtonLeft_; }
-    void setDisplayButtonLeft(std::uint16_t value) { set(displayButtonLeft_, value); }
+    [[nodiscard]] std::uint16_t displayButtonLeft() const
+    {
+        return displayButtonLeft_;
+    }
+    void setDisplayButtonLeft(std::uint16_t value)
+    {
+        set(displayButtonLeft_, value);
+    }
 
-    [[nodiscard]] std::uint16_t displayButtonRight() const { return displayButtonRight_; }
-    void setDisplayButtonRight(std::uint16_t value) { set(displayButtonRight_, value); }
+    [[nodiscard]] std::uint16_t displayButtonRight() const
+    {
+        return displayButtonRight_;
+    }
+    void setDisplayButtonRight(std::uint16_t value)
+    {
+        set(displayButtonRight_, value);
+    }
 
-    [[nodiscard]] std::uint16_t motorReachedDestination(std::size_t index) const { return motorReachedDestination_.at(index); }
-    void setMotorReachedDestination(std::size_t index, std::uint16_t value) { set(motorReachedDestination_.at(index), value); }
+    [[nodiscard]] std::uint16_t motorReachedDestination(std::size_t index) const
+    {
+        return motorReachedDestination_.at(index);
+    }
+    void setMotorReachedDestination(std::size_t index, std::uint16_t value)
+    {
+        set(motorReachedDestination_.at(index), value);
+    }
 
-    [[nodiscard]] std::uint16_t resetCounter(std::size_t index) const { return resetCounters_.at(index); }
-    void setResetCounter(std::size_t index, std::uint16_t value) { set(resetCounters_.at(index), value); }
+    [[nodiscard]] std::uint16_t resetCounter(std::size_t index) const
+    {
+        return resetCounters_.at(index);
+    }
+    void setResetCounter(std::size_t index, std::uint16_t value)
+    {
+        set(resetCounters_.at(index), value);
+    }
 
     /// Set whenever an input value changes; reset it after handling the change.
     bool changed = true;
 
-private:
-    template <typename T>
-    void set(T& field, T value)
+  private:
+    template <typename T> void set(T& field, T value)
     {
         changed |= field != value;
         field = value;
@@ -214,7 +264,9 @@ struct Output
 /// A TX controller (local master or one of the extension slaves) and its transfer area.
 struct Extension
 {
-    explicit Extension(std::uint32_t index) : transferAreaIndex(index) {}
+    explicit Extension(std::uint32_t index) : transferAreaIndex(index)
+    {
+    }
 
     std::uint32_t transferAreaIndex;
 

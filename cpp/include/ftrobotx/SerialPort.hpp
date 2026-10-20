@@ -14,7 +14,7 @@ namespace ftrobotx
 /// On Linux, "bt:XX:XX:XX:XX:XX:XX" connects to a paired controller directly over Bluetooth, without rfcomm bind.
 class SerialPort
 {
-public:
+  public:
     struct PortInfo
     {
         std::string name;        // what to pass to the constructor
@@ -39,7 +39,7 @@ public:
     /// asks BlueZ for the paired devices.
     static std::vector<PortInfo> listPorts();
 
-private:
+  private:
     struct Impl;
     std::unique_ptr<Impl> impl_;
 };

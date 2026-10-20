@@ -12,7 +12,7 @@
 /// The UI works on snapshots and hands its changes back with setOutputs() and setConfig().
 class DeviceWorker
 {
-public:
+  public:
     enum class State
     {
         Disconnected,
@@ -45,7 +45,7 @@ public:
     void setConfig(std::size_t controller, const ftrobotx::Config& config);
     void stopAllOutputs();
 
-private:
+  private:
     void run(std::stop_token stop, const std::string& port, std::size_t numControllers);
 
     mutable std::mutex mutex_;
