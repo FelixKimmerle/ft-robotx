@@ -1,4 +1,4 @@
-namespace FtRoboTxOnline.Extensions;
+namespace FtRoboTx.Extensions;
 
 public readonly record struct UniversalInputConfig(InputMode Mode, bool Digital)
 {

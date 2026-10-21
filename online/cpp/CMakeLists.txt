@@ -1,8 +1,8 @@
 cmake_minimum_required(VERSION 3.28)
 
-project(FtRoboTxOnline
+project(FtRoboTx
     VERSION 1.0.0
-    DESCRIPTION "ft-robotx-online: control fischertechnik ROBO TX Controllers in online mode"
+    DESCRIPTION "ft-robotx: control fischertechnik ROBO TX Controllers in online mode"
     LANGUAGES CXX)
 
 option(FT_BUILD_EXAMPLES "Build the demo program" ${PROJECT_IS_TOP_LEVEL})

@@ -7,7 +7,7 @@ endif()
 
 project(FtRoboTxOffline
     VERSION 1.0.0
-    DESCRIPTION "ft-robotx-online, offline part: C programs that run on the fischertechnik ROBO TX Controller"
+    DESCRIPTION "ft-robotx, offline part: C programs that run on the fischertechnik ROBO TX Controller"
     LANGUAGES C ASM)
 
 set(FTROBOTX_PORT "" CACHE STRING "Port for the deploy targets: /dev/ttyACM0, bt:XX:XX:XX:XX:XX:XX, ... (empty: find the USB controller)")

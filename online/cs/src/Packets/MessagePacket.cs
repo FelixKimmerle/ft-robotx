@@ -1,6 +1,6 @@
 using System.Text;
 
-namespace FtRoboTxOnline.Packets;
+namespace FtRoboTx.Packets;
 
 /// <summary>
 /// Shows a text on a controller's display, or clears it with an empty text (telecode 8, like ftMscLib's

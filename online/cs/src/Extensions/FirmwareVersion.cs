@@ -1,4 +1,4 @@
-namespace FtRoboTxOnline.Extensions;
+namespace FtRoboTx.Extensions;
 
 /// <summary>Versions from the controller's info block (FT_VERSION in ROBO_TX_FW.h).</summary>
 public readonly record struct FirmwareVersion(

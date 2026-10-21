@@ -1,4 +1,4 @@
-namespace FtRoboTxOnline.Packets;
+namespace FtRoboTx.Packets;
 
 public class EchoPacket : Packet
 {

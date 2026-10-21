@@ -1,6 +1,6 @@
-using FtRoboTxOnline.Extensions;
+using FtRoboTx.Extensions;
 
-namespace FtRoboTxOnline.Packets;
+namespace FtRoboTx.Packets;
 
 public class OutputPacket : Packet
 {

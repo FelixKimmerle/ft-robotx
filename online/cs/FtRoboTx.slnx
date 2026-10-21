@@ -3,5 +3,5 @@
     <Project Path="examples/ButtonLamp/ButtonLamp.csproj" />
     <Project Path="examples/ExtensionTest/ExtensionTest.csproj" />
   </Folder>
-  <Project Path="FtRoboTxOnline.csproj" />
+  <Project Path="FtRoboTx.csproj" />
 </Solution>

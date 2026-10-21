@@ -1,7 +1,7 @@
 // Lamp on O1 is on while the button on I1 is pressed.
 // Usage: dotnet run [port], default /dev/ttyACM0 (USB)
-using FtRoboTxOnline;
-using FtRoboTxOnline.Extensions;
+using FtRoboTx;
+using FtRoboTx.Extensions;
 
 const short On = 512;
 

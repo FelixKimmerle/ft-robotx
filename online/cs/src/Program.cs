@@ -1,6 +1,6 @@
 using System.IO.Ports;
-using FtRoboTxOnline;
-using FtRoboTxOnline.Extensions;
+using FtRoboTx;
+using FtRoboTx.Extensions;
 
 // Usage: dotnet run [port], e.g. /dev/ttyACM0 (USB), /dev/rfcomm0 (Bluetooth) or COM3
 string[] ports = SerialPort.GetPortNames();

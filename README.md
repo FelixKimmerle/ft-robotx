@@ -168,7 +168,7 @@ You need the .NET 10 SDK.
 
 ```bash
 cd online/cs
-dotnet build FtRoboTxOnline.slnx
+dotnet build FtRoboTx.slnx
 ```
 
 ### Programs and examples
@@ -212,7 +212,7 @@ A test tool in the spirit of fischertechnik's *RoboTxTest*, for checking wiring,
   devices. You can also type any port.
 - Each controller has its own window. They start as tabs; drag a tab to dock it beside or below another, or use
   **Layout** → *Side by side* / *Stacked* / *Tabs*. The arrangement is remembered (on Linux in
-  `~/.local/share/ft-robotx-online/gui/imgui.ini`).
+  `~/.local/share/ft-robotx/gui/imgui.ini`).
 - Each window shows:
   - **Universal inputs I1–I8**: mode (voltage in mV, resistance in Ω, ultrasonic distance in cm), analog or
     digital, and the current value.
@@ -230,7 +230,7 @@ A test tool in the spirit of fischertechnik's *RoboTxTest*, for checking wiring,
 C++, with CMake:
 
 ```cmake
-add_subdirectory(ft-robotx-online/online/cpp)
+add_subdirectory(ft-robotx/online/cpp)
 target_link_libraries(my_app PRIVATE ftrobotx::ftrobotx)
 ```
 
@@ -255,8 +255,8 @@ tx.update();
 C#:
 
 ```csharp
-using FtRoboTxOnline;
-using FtRoboTxOnline.Extensions;
+using FtRoboTx;
+using FtRoboTx.Extensions;
 
 using FtConnection tx = new("/dev/ttyACM0", numExtensions: 2);
 tx.Update();

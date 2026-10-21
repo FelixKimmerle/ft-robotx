@@ -1,8 +1,8 @@
 using System.IO.Ports;
-using FtRoboTxOnline.Extensions;
-using FtRoboTxOnline.Packets;
+using FtRoboTx.Extensions;
+using FtRoboTx.Packets;
 
-namespace FtRoboTxOnline;
+namespace FtRoboTx;
 
 /// <summary>Serial connection to a fischertechnik ROBO TX Controller and its extensions.</summary>
 public sealed class FtConnection : IDisposable

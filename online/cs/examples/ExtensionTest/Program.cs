@@ -1,8 +1,8 @@
 // Master and one extension, each with a button on I1 and a lamp on O1, wired crosswise:
 // the master's button switches the extension's lamp and the other way round.
 // Usage: dotnet run [port], default /dev/ttyACM0 (USB)
-using FtRoboTxOnline;
-using FtRoboTxOnline.Extensions;
+using FtRoboTx;
+using FtRoboTx.Extensions;
 
 const short On = 512;
 ExtensionIndex[] controllers = [ExtensionIndex.Local, ExtensionIndex.Slave1];

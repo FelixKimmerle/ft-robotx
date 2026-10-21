@@ -1,4 +1,4 @@
-namespace FtRoboTxOnline.Packets;
+namespace FtRoboTx.Packets;
 
 /// <summary>
 /// Reads the master's state (telecode 7, ftMscLib's STATE_RD_REQUEST). Of the 24 bytes per controller, only the

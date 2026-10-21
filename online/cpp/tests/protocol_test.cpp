@@ -102,12 +102,12 @@ int main()
                 "0000000000000000000000000000000000000000000000000000000000000000F65803");
     RequestInfoPacket info(ex);
     checkPacket(info, "RequestInfoPacket", "0255001C02000000010000000201CDAB06000000020000000000000001000000FE5D03");
-    // Telecode 8 as it showed "Hello from ft-robotx-online" on a real controller
-    MessagePacket message(0, 1, "Hello from ft-robotx-online");
+    // Telecode 8, in the format that showed a message on a real controller
+    MessagePacket message(0, 1, "Hello from ft-robotx");
     checkPacket(message, "MessagePacket",
                 "0255007C02000000010000000201CDAB0800000001000000000000000148656C6C6F2066726F6D2066742D726F626F74"
-                "782D6F6E6C696E6500000000000000000000000000000000000000000000000000000000000000000000000000000000"
-                "0000000000000000000000000000000000000000000000000000000000000000F3BD03");
+                "780000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000000"
+                "0000000000000000000000000000000000000000000000000000000000000000F66F03");
     MessagePacket longMessage(1, 7, std::string(200, 'x'));
     check(longMessage.bytes().size() == 27 + 104, "MessagePacket length is fixed");
 

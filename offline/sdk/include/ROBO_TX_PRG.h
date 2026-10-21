@@ -12,7 +12,7 @@
 // free of any license obligations or authoring rights.
 //
 // From fischertechnik's C compiler package "C_Compiler_RoboTXC" V1.2 (firmware 1.30).
-// Changed for ft-robotx-online (modern arm-none-eabi-gcc instead of YAGARTO GCC 4.4.1):
+// Changed for ft-robotx (modern arm-none-eabi-gcc instead of YAGARTO GCC 4.4.1):
 //   - no #include <math.h> (would need newlib; include it yourself if you need it)
 //   - NULL only defined if not defined yet
 //   - no bool enum in C23, where bool is a keyword

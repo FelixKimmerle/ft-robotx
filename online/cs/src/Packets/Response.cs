@@ -1,6 +1,6 @@
 using System.Buffers.Binary;
 
-namespace FtRoboTxOnline.Packets;
+namespace FtRoboTx.Packets;
 
 public class Response
 {

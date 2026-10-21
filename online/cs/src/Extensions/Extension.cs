@@ -1,4 +1,4 @@
-namespace FtRoboTxOnline.Extensions;
+namespace FtRoboTx.Extensions;
 
 /// <summary>A TX controller (local master or one of the extension slaves) and its transfer area.</summary>
 public class Extension(uint transferAreaIndex)

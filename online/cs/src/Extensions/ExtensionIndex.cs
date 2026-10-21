@@ -1,4 +1,4 @@
-namespace FtRoboTxOnline.Extensions;
+namespace FtRoboTx.Extensions;
 
 public enum ExtensionIndex
 {

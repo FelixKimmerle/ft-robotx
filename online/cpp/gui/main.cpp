@@ -1,4 +1,4 @@
-// ft-robotx-online test tool: shows and controls all inputs, outputs and counters of a master and its extensions.
+// ft-robotx test tool: shows and controls all inputs, outputs and counters of a master and its extensions.
 // Usage: ftrobotx_gui [port [extensions]]; with a port given, it connects right away.
 #include <cstdio>
 #include <string>
@@ -25,7 +25,7 @@ int main(int argc, char* argv[])
         scale = 1;
     }
     SDL_Window* window =
-        SDL_CreateWindow("ft-robotx-online", static_cast<int>(1100 * scale), static_cast<int>(640 * scale),
+        SDL_CreateWindow("ft-robotx", static_cast<int>(1100 * scale), static_cast<int>(640 * scale),
                          SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (window == nullptr)
     {
@@ -47,9 +47,9 @@ int main(int argc, char* argv[])
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard | ImGuiConfigFlags_DockingEnable;
 
-    // Remember the window layout per user, e.g. ~/.local/share/ft-robotx-online/gui/imgui.ini
+    // Remember the window layout per user, e.g. ~/.local/share/ft-robotx/gui/imgui.ini
     std::string iniPath;
-    if (char* prefPath = SDL_GetPrefPath("ft-robotx-online", "gui"))
+    if (char* prefPath = SDL_GetPrefPath("ft-robotx", "gui"))
     {
         iniPath = std::string(prefPath) + "imgui.ini";
         SDL_free(prefPath);

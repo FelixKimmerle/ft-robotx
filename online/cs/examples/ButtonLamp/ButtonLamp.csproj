@@ -9,7 +9,7 @@
   </PropertyGroup>
 
   <ItemGroup>
-    <ProjectReference Include="../../FtRoboTxOnline.csproj" />
+    <ProjectReference Include="../../FtRoboTx.csproj" />
   </ItemGroup>
 
 </Project>
