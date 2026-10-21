@@ -1,4 +1,4 @@
-# ft-robotx-online
+# ft-robotx
 
 <p align="center">
   <img src="images/robo-tx-controller.jpg" alt="Rendered image of a ROBO TX Controller" width="280">
