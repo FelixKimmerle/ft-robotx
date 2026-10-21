@@ -1,0 +1,407 @@
+#!/usr/bin/env python3
+"""Upload, load, start and stop programs on a fischertechnik ROBO TX Controller.
+
+Talks to the controller's remote shell (the same one fischertechnik's 4load_ft.exe and 4cmd_ft.exe use) over USB or
+Bluetooth, and transfers files with Xmodem. On Linux and macOS it needs only the Python standard library; on Windows
+it needs pyserial for COM ports (pip install pyserial).
+
+Ports:
+  (none)                 the ROBO TX Controller on USB, found by its USB ID 221d:1000
+  /dev/ttyACM0, COM3     USB
+  /dev/rfcomm0, COM5     Bluetooth via rfcomm bind (Linux) or the COM port Windows creates when pairing
+  bt:00:13:7B:53:DB:5E   Bluetooth directly by address (Linux; needs no rfcomm bind, root or uucp group)
+
+Examples:
+  ftrobotx-load deploy build/ButtonLamp.bin          upload to the RAM disk, load and start
+  ftrobotx-load deploy --flash build/ButtonLamp.bin  same, but keep it on the flash disk
+  ftrobotx-load stop
+  ftrobotx-load dir flash
+  ftrobotx-load shell                                 type shell commands yourself
+"""
+
+import argparse
+import glob
+import os
+import re
+import select
+import socket
+import sys
+import time
+
+if os.name == "posix":
+    import termios
+    import tty
+
+ROBO_TX_USB_ID = (0x221D, 0x1000)
+TX_RFCOMM_CHANNEL = 1
+
+# Xmodem control bytes
+SOH, STX, EOT, ACK, NAK, CAN, CRC_REQUEST = 0x01, 0x02, 0x04, 0x06, 0x15, 0x18, ord("C")
+
+
+class LoadError(Exception):
+    pass
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Connections: byte streams to the controller with write(data), read(timeout) and close()
+
+
+class BluetoothConnection:
+    """Direct RFCOMM connection to a paired controller."""
+
+    def __init__(self, address):
+        if not hasattr(socket, "AF_BLUETOOTH"):
+            raise LoadError("Direct Bluetooth connections (bt:...) aren't supported here; use the controller's COM port")
+        for attempt in range(2):
+            self.socket = socket.socket(socket.AF_BLUETOOTH, socket.SOCK_STREAM, socket.BTPROTO_RFCOMM)
+            self.socket.settimeout(20)  # establishing the link takes a few seconds
+            try:
+                self.socket.connect((address, TX_RFCOMM_CHANNEL))
+                break
+            except OSError as e:
+                self.socket.close()
+                # Right after a previous connection the controller may still refuse; try once more.
+                if attempt == 1 or e.errno not in (104, 111, 112, 10054, 10061):
+                    raise LoadError(f"Cannot connect to {address}: {e}") from e
+                time.sleep(2)
+        self.socket.setblocking(False)
+
+    def write(self, data):
+        while data:
+            select.select([], [self.socket], [], 5)
+            data = data[self.socket.send(data):]
+
+    def read(self, timeout):
+        """Returns whatever arrives within timeout seconds (b"" if nothing)."""
+        ready, _, _ = select.select([self.socket], [], [], timeout)
+        if not ready:
+            return b""
+        data = self.socket.recv(4096)
+        if not data:
+            raise LoadError("Connection closed by the controller")
+        return data
+
+    def close(self):
+        self.socket.close()
+
+
+class PosixSerialConnection:
+    """Serial device on Linux or macOS (/dev/ttyACM0, /dev/rfcomm0, ...)."""
+
+    def __init__(self, port):
+        try:
+            self.fd = os.open(port, os.O_RDWR | os.O_NOCTTY)
+        except OSError as e:
+            hint = " (are you in the uucp/dialout group?)" if e.errno == 13 else ""
+            raise LoadError(f"Cannot open {port}: {e.strerror}{hint}") from e
+        tty.setraw(self.fd)
+        attributes = termios.tcgetattr(self.fd)
+        attributes[2] |= termios.CLOCAL | termios.CREAD
+        termios.tcsetattr(self.fd, termios.TCSANOW, attributes)
+        termios.tcflush(self.fd, termios.TCIOFLUSH)
+
+    def write(self, data):
+        while data:
+            select.select([], [self.fd], [], 5)
+            data = data[os.write(self.fd, data):]
+
+    def read(self, timeout):
+        """Returns whatever arrives within timeout seconds (b"" if nothing)."""
+        ready, _, _ = select.select([self.fd], [], [], timeout)
+        if not ready:
+            return b""
+        data = os.read(self.fd, 4096)
+        if not data:
+            raise LoadError("Connection closed by the controller")
+        return data
+
+    def close(self):
+        os.close(self.fd)
+
+
+class PySerialConnection:
+    """COM port on Windows, through pyserial."""
+
+    def __init__(self, port):
+        serial = import_pyserial()
+        try:
+            self.port = serial.Serial(port, timeout=0.5, write_timeout=5)
+        except serial.SerialException as e:
+            raise LoadError(f"Cannot open {port}: {e}") from e
+
+    def write(self, data):
+        self.port.write(data)
+
+    def read(self, timeout):
+        """Returns whatever arrives within timeout seconds (b"" if nothing)."""
+        self.port.timeout = timeout
+        return self.port.read(max(1, self.port.in_waiting))
+
+    def close(self):
+        self.port.close()
+
+
+def import_pyserial():
+    try:
+        import serial
+        import serial.tools.list_ports
+    except ImportError:
+        raise LoadError("COM ports need pyserial: pip install pyserial") from None
+    return serial
+
+
+def open_connection(port):
+    if port.startswith("bt:"):
+        return BluetoothConnection(port[3:])
+    if os.name == "posix":
+        return PosixSerialConnection(port)
+    return PySerialConnection(port)
+
+
+def find_usb_controller():
+    if os.name != "posix":
+        serial = import_pyserial()
+        for port in serial.tools.list_ports.comports():
+            if (port.vid, port.pid) == ROBO_TX_USB_ID:
+                return port.device
+    for device in sorted(glob.glob("/sys/class/tty/ttyACM*")):
+        path = os.path.realpath(os.path.join(device, "device"))
+        for _ in range(3):
+            path = os.path.dirname(path)
+            try:
+                with open(os.path.join(path, "idVendor")) as vendor, open(os.path.join(path, "idProduct")) as product:
+                    if (int(vendor.read(), 16), int(product.read(), 16)) == ROBO_TX_USB_ID:
+                        return "/dev/" + os.path.basename(device)
+                    break
+            except (OSError, ValueError):
+                continue
+    raise LoadError("No ROBO TX Controller found on USB; give the port with --port")
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Remote shell
+
+
+class Shell:
+    PROMPT = re.compile(rb"\r?\n?[^\r\n]*/(USB|Bluetooth)>\s*$")  # waiting for input
+    PROMPT_ANYWHERE = re.compile(rb"[^\r\n]*/(USB|Bluetooth)>")
+
+    def __init__(self, connection, verbose):
+        self.connection = connection
+        self.verbose = verbose
+        self.pending = b""  # received after an Xmodem answer byte, belongs to the shell output
+        # Cancel a file transfer left over from an aborted upload (the controller would wait for its data), then
+        # an empty line answers with a prompt.
+        self.connection.write(bytes([CAN, CAN, CAN]))
+        time.sleep(0.2)
+        self.connection.write(b"\r")
+        self.read_until_prompt(timeout=10)
+        self.drain()
+
+    def drain(self):
+        """Discards anything still arriving, e.g. a second prompt."""
+        while self.connection.read(0.3):
+            pass
+
+    def read_until_prompt(self, timeout=10.0):
+        data, self.pending = self.pending, b""
+        deadline = time.monotonic() + timeout
+        while not self.PROMPT.search(data):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise LoadError("The controller doesn't answer. Is another program (e.g. ftrobotx_gui) connected?")
+            data += self.connection.read(min(remaining, 0.5))
+        return data
+
+    def command(self, line, timeout=10.0):
+        """Runs a shell command and returns its output without the echoed command and the prompt."""
+        if self.verbose:
+            print(f"> {line}", file=sys.stderr)
+        self.connection.write(line.encode("latin-1") + b"\r")
+        output = self.read_until_prompt(timeout).decode("latin-1")
+        lines = output.replace("\r", "").split("\n")
+        if lines and lines[0].strip() == line.strip():
+            lines = lines[1:]  # echo
+        return "\n".join(lines[:-1]).strip("\n")  # without the prompt
+
+    # Xmodem ---------------------------------------------------------------------------------------------------------
+
+    def send_file(self, data, target):
+        """Stores data as target (e.g. /ramdisk/Prog.bin) on the controller using Xmodem."""
+        line = f"xrecv {target} {len(data)}"
+        if self.verbose:
+            print(f"> {line}", file=sys.stderr)
+        self.connection.write(line.encode("latin-1") + b"\r")
+
+        # The controller echoes the command and prints its prompt right away, then asks for the data about a second
+        # later: 'C' for 1 KiB blocks with CRC, NAK for 128-byte blocks with checksum.
+        received = b""
+        deadline = time.monotonic() + 10
+        mode = None
+        while mode is None:
+            prompt = self.PROMPT_ANYWHERE.search(received)
+            if prompt:
+                for byte in received[prompt.end():]:
+                    if byte in (CRC_REQUEST, NAK):
+                        mode = byte
+                        break
+            if mode is None:
+                if time.monotonic() > deadline:
+                    answer = received.decode("latin-1").replace("\r", "").strip()
+                    raise LoadError(f"The controller refused the upload: {answer!r}")
+                received += self.connection.read(0.5)
+
+        use_crc = mode == CRC_REQUEST
+        block_size = 1024 if use_crc else 128
+        blocks = [data[i:i + block_size] for i in range(0, len(data), block_size)] or [b""]
+        for number, block in enumerate(blocks, start=1):
+            self._send_block(number, block.ljust(block_size, b"\x1a"), use_crc)
+            print(f"\r  {min(number * block_size, len(data))} / {len(data)} bytes", end="", file=sys.stderr)
+        print(file=sys.stderr)
+
+        for _ in range(10):
+            self.connection.write(bytes([EOT]))
+            if self._wait_for_answer() == ACK:
+                break
+        else:
+            raise LoadError("Upload not confirmed")
+        # The controller answers "done" (no prompt follows).
+        result, self.pending = self.pending, b""
+        deadline = time.monotonic() + 3
+        while b"done" not in result and not self.PROMPT_ANYWHERE.search(result) and time.monotonic() < deadline:
+            result += self.connection.read(0.5)
+        result = self.PROMPT_ANYWHERE.sub(b"", result).decode("latin-1").replace("\r", "").strip()
+        if result != "done":
+            raise LoadError(f"Upload failed: {result!r}")
+        return ""
+
+    def _send_block(self, number, block, use_crc):
+        header = bytes([STX if len(block) == 1024 else SOH, number & 0xFF, 0xFF - (number & 0xFF)])
+        trailer = crc16(block).to_bytes(2, "big") if use_crc else bytes([sum(block) & 0xFF])
+        for _ in range(10):
+            self.connection.write(header + block + trailer)
+            answer = self._wait_for_answer()
+            if answer == ACK:
+                return
+            if answer == CAN:
+                raise LoadError("Upload cancelled by the controller")
+        raise LoadError(f"Block {number} was not accepted")
+
+    def _wait_for_answer(self, timeout=10.0):
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            data = self.connection.read(0.5)
+            for index, byte in enumerate(data):
+                if byte in (ACK, NAK, CAN):
+                    self.pending = data[index + 1:]
+                    return byte
+        return None
+
+
+def crc16(data):
+    """CRC-16/XMODEM."""
+    crc = 0
+    for byte in data:
+        crc ^= byte << 8
+        for _ in range(8):
+            crc = (crc << 1) ^ 0x1021 if crc & 0x8000 else crc << 1
+        crc &= 0xFFFF
+    return crc
+
+
+# --------------------------------------------------------------------------------------------------------------------
+# Commands
+
+
+def print_output(text):
+    if text:
+        print(text)
+
+
+def upload(shell, path, flash, name=None):
+    with open(path, "rb") as file:
+        data = file.read()
+    target = f"/{'flash' if flash else 'ramdisk'}/{name or os.path.basename(path)}"
+    print(f"Uploading {path} to {target} ({len(data)} bytes)", file=sys.stderr)
+    print_output(shell.send_file(data, target))
+    return target
+
+
+def interactive(shell):
+    print("Remote shell; 'help' lists the commands, Ctrl+D quits.", file=sys.stderr)
+    while True:
+        try:
+            line = input("TX> ")
+        except EOFError:
+            print()
+            return
+        if line.strip():
+            print_output(shell.command(line, timeout=30))
+
+
+def main():
+    parser = argparse.ArgumentParser(
+        description=__doc__.split("\n\n")[0],
+        epilog="\n\n".join(__doc__.split("\n\n")[1:]),
+        formatter_class=argparse.RawDescriptionHelpFormatter)
+    parser.add_argument("-p", "--port", help="/dev/ttyACM0, /dev/rfcomm0 or bt:XX:XX:XX:XX:XX:XX (default: USB)")
+    parser.add_argument("-v", "--verbose", action="store_true", help="show the shell commands sent")
+    commands = parser.add_subparsers(dest="command", required=True)
+
+    deploy = commands.add_parser("deploy", help="stop the running program, upload, load and start a program")
+    upload_ = commands.add_parser("upload", help="upload a file to the RAM disk (or flash disk)")
+    for sub in (deploy, upload_):
+        sub.add_argument("file", help="program file (.bin)")
+        sub.add_argument("--flash", action="store_true", help="store on the flash disk (kept when switched off)")
+        sub.add_argument("--name", help="file name on the controller (default: as on the PC)")
+    load = commands.add_parser("load", help="load a program file into program memory")
+    load.add_argument("path", help="e.g. /ramdisk/ButtonLamp.bin or /flash/ButtonLamp.bin")
+    commands.add_parser("run", help="start the loaded program")
+    commands.add_parser("stop", help="stop the running program")
+    dir_ = commands.add_parser("dir", help="list a disk")
+    dir_.add_argument("disk", nargs="?", default="", help="ramdisk, flash or system (default: all disks)")
+    delete = commands.add_parser("del", help="delete a file")
+    delete.add_argument("path", help="e.g. /ramdisk/ButtonLamp.bin")
+    commands.add_parser("shell", help="interactive remote shell")
+    args = parser.parse_args()
+
+    connection = None
+    try:
+        port = args.port or find_usb_controller()
+        connection = open_connection(port)
+        shell = Shell(connection, args.verbose)
+
+        if args.command == "deploy":
+            # Right after stopping or loading, the controller ignores a run command; give it a moment.
+            print_output(shell.command("stop"))
+            time.sleep(1)
+            target = upload(shell, args.file, args.flash, args.name)
+            print_output(shell.command(f"load {target}"))
+            time.sleep(1)
+            print_output(shell.command("run"))
+        elif args.command == "upload":
+            upload(shell, args.file, args.flash, args.name)
+        elif args.command == "load":
+            print_output(shell.command(f"load {args.path}"))
+        elif args.command in ("run", "stop"):
+            print_output(shell.command(args.command))
+        elif args.command == "dir":
+            print_output(shell.command(f"dir {args.disk}".strip()))
+        elif args.command == "del":
+            print_output(shell.command(f"del {args.path}"))
+        elif args.command == "shell":
+            interactive(shell)
+    except (LoadError, OSError) as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    except KeyboardInterrupt:
+        return 130
+    finally:
+        if connection:
+            connection.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
