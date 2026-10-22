@@ -103,7 +103,7 @@ There are two ways to connect after pairing.
 Pass `bt:` plus the controller's address as the port:
 
 ```bash
-online/cpp/build/ftrobotx_gui bt:00:13:7B:53:DB:5E
+online/cpp/build/ftrobotx_gui -p bt:00:13:7B:53:DB:5E
 ```
 
 This needs no root, no `rfcomm` binding and no group membership. The test tool lists paired ROBO TX controllers
@@ -173,26 +173,72 @@ dotnet build FtRoboTx.slnx
 
 ### Programs and examples
 
-All programs take the port as their first argument: `/dev/ttyACM0`, `/dev/rfcomm0`, `COM3`, or (C++ on Linux)
-`bt:00:13:7B:53:DB:5E`. Ctrl+C stops them, and they switch all outputs off before exiting.
+#### Choosing the controller: `-p`
+
+All programs (C++ and C#) choose the controller the same way:
+
+- **`-p, --port PORT`**: the port the ROBO TX Controller is connected to:
+  - `/dev/ttyACM0`: USB (Linux)
+  - `/dev/rfcomm0`: Bluetooth via `rfcomm bind` (Linux, see [Bluetooth](#connecting-via-bluetooth))
+  - `bt:00:13:7B:53:DB:5E`: Bluetooth directly by address (C++ on Linux only; no `rfcomm`, root or group needed)
+  - `COM3`: USB or Bluetooth on Windows
+- **Without `-p`**, the programs use the first ROBO TX Controller found on USB (by its USB ID `221d:1000`) and print
+  which port that is. If there is none, they ask for `-p`.
+- **`-h, --help`** shows all options of a program.
+
+Ctrl+C stops the programs, and they switch all outputs off before exiting.
 
 | Program | C++ (`online/cpp/build/…`) | C# (`online/cs/…`) | What it does |
 | ------- | ------------------- | ----------- | ------------ |
 | Test tool | [`ftrobotx_gui`](online/cpp/gui) | – | Shows and controls everything; see below |
 | Button and lamp | [`ftrobotx_button_lamp`](online/cpp/examples/button_lamp.cpp) | [`examples/ButtonLamp`](online/cs/examples/ButtonLamp/Program.cs) | Lamp on O1 lights while the button on I1 is pressed |
 | Extension test | [`ftrobotx_extension_test`](online/cpp/examples/extension_test.cpp) | [`examples/ExtensionTest`](online/cs/examples/ExtensionTest/Program.cs) | Master and extension 1 with button on I1 and lamp on O1 each, crosswise: each button switches the *other* controller's lamp |
-| Display message | [`ftrobotx_message`](online/cpp/examples/message.cpp) | – | Shows a text on a controller's display: `ftrobotx_message /dev/ttyACM0 0 Hello` (0 = master, 1 = extension 1, …; without text it clears) |
+| Display message | [`ftrobotx_message`](online/cpp/examples/message.cpp) | – | Shows a text on a controller's display, or clears it |
 | Demo | [`ftrobotx_demo`](online/cpp/examples/main.cpp) | [`src/Program.cs`](online/cs/src/Program.cs) | The original demo: motor control with master and one extension |
 
 Running them:
 
 ```bash
-cd online/cpp && ./build/ftrobotx_button_lamp /dev/ttyACM0
+cd online/cpp && ./build/ftrobotx_button_lamp                 # controller on USB, found automatically
+cd online/cpp && ./build/ftrobotx_button_lamp -p /dev/rfcomm0  # a given port
 ```
 
 ```bash
-cd online/cs/examples/ButtonLamp && dotnet run -- /dev/ttyACM0
+cd online/cs/examples/ButtonLamp && dotnet run -- -p /dev/ttyACM0   # options after "--" go to the program
 ```
+
+`ftrobotx_button_lamp`, `ftrobotx_extension_test` and `ftrobotx_demo` (and the C# programs) only have `-p` and `-h`:
+
+```text
+Usage: ftrobotx_button_lamp [-p PORT]
+
+Lamp on O1 lights while the button on I1 is pressed. Ctrl+C quits and switches the lamp off.
+
+Options:
+  -h, --help            Show this help and exit.
+  -p, --port PORT       Port of the ROBO TX Controller: /dev/ttyACM0 (USB), /dev/rfcomm0 (Bluetooth via rfcomm),
+                        bt:00:13:7B:53:DB:5E (Bluetooth directly, Linux) or COM3 (Windows).
+                        Default: the first ROBO TX Controller found on USB.
+```
+
+`ftrobotx_message` also chooses the display and takes the text:
+
+```text
+Usage: ftrobotx_message [-p PORT] [-c N] [TEXT...]
+
+Shows TEXT (up to 98 characters) on a controller's display. Without TEXT, the message on the
+display is cleared.
+
+Options:
+  -h, --help            Show this help and exit.
+  -p, --port PORT       Port of the ROBO TX Controller: /dev/ttyACM0 (USB), /dev/rfcomm0 (Bluetooth via rfcomm),
+                        bt:00:13:7B:53:DB:5E (Bluetooth directly, Linux) or COM3 (Windows).
+                        Default: the first ROBO TX Controller found on USB.
+  -c, --controller N    Display to use: 0 = master (default), 1 ... 8 = extension 1 ... 8.
+```
+
+For example `ftrobotx_message Hello` (master), `ftrobotx_message -c 2 Hello` (extension 2), `ftrobotx_message -c 2`
+(clears it).
 
 ### The test tool (`ftrobotx_gui`)
 
@@ -203,9 +249,22 @@ A test tool in the spirit of fischertechnik's *RoboTxTest*, for checking wiring,
 </p>
 
 ```bash
-./build/ftrobotx_gui                            # choose port and number of extensions, then Connect
-./build/ftrobotx_gui /dev/ttyACM0 1             # connect right away: master and 1 extension
-./build/ftrobotx_gui bt:00:13:7B:53:DB:5E 1     # the same via Bluetooth
+./build/ftrobotx_gui                                 # choose port and number of extensions, then Connect
+./build/ftrobotx_gui -p /dev/ttyACM0 -e 1            # connect right away: master and 1 extension
+./build/ftrobotx_gui -p bt:00:13:7B:53:DB:5E -e 1    # the same via Bluetooth
+```
+
+```text
+Usage: ftrobotx_gui [-p PORT] [-e N]
+
+Test tool: shows and controls the inputs, outputs, counters and display of a ROBO TX Controller
+and its extensions. Without -p, choose the port in the window and press Connect.
+
+Options:
+  -h, --help            Show this help and exit.
+  -p, --port PORT       Connect right away to this port: /dev/ttyACM0 (USB), /dev/rfcomm0 (Bluetooth via
+                        rfcomm), bt:00:13:7B:53:DB:5E (Bluetooth directly, Linux) or COM3 (Windows).
+  -e, --extensions N    Number of extensions behind the master, 0 ... 8 (default: 1).
 ```
 
 - The **port menu** lists ROBO TX controllers on USB, paired ROBO TX controllers for Bluetooth, and bound rfcomm
@@ -327,24 +386,77 @@ This creates `build/ButtonLamp.bin` and `build/ExtensionTest.bin`.
 
 ### Uploading, starting and stopping
 
-`offline/tools/ftrobotx-load` finds the controller on USB by itself. For other ports, add `-p`, e.g.
-`-p bt:00:13:7B:53:DB:5E` (direct Bluetooth, Linux), `-p /dev/rfcomm0` or `-p COM3` (Windows). No other program,
-such as `ftrobotx_gui`, may be connected at the same time.
+`offline/tools/ftrobotx-load` has one command per action (`deploy`, `run`, `stop`, …). **The options `-p` and `-v`
+come before the command**, the command's own options after it:
 
 ```bash
-./tools/ftrobotx-load deploy build/ButtonLamp.bin
+./tools/ftrobotx-load deploy build/ButtonLamp.bin                        # controller on USB, found automatically
+./tools/ftrobotx-load -p bt:00:13:7B:53:DB:5E deploy build/ButtonLamp.bin  # via Bluetooth
+./tools/ftrobotx-load -p /dev/ttyACM0 deploy --flash build/ButtonLamp.bin  # keep it on the flash disk
+```
+
+- **`-p, --port PORT`**: the controller's port, as in online mode: `/dev/ttyACM0` (USB), `/dev/rfcomm0` (Bluetooth
+  via rfcomm), `bt:00:13:7B:53:DB:5E` (Bluetooth directly, Linux) or `COM3` (Windows). Without `-p`, it uses the
+  first ROBO TX Controller found on USB and prints which port that is.
+- **`-v, --verbose`**: also shows the shell commands sent to the controller.
+- **`-h, --help`**: shows the help; `ftrobotx-load COMMAND --help` shows a command's own options.
+
+No other program, such as `ftrobotx_gui`, may be connected to the controller at the same time.
+
+```text
+usage: ftrobotx-load [-h] [-p PORT] [-v]
+                     {deploy,upload,load,run,stop,dir,del,shell} ...
+
+Upload, load, start and stop programs on a fischertechnik ROBO TX Controller.
+
+positional arguments:
+  {deploy,upload,load,run,stop,dir,del,shell}
+    deploy              stop the running program, upload, load and start a
+                        program
+    upload              upload a file to the RAM disk (or flash disk)
+    load                load a program file into program memory
+    run                 start the loaded program
+    stop                stop the running program
+    dir                 list a disk
+    del                 delete a file
+    shell               interactive remote shell
+
+options:
+  -h, --help            show this help message and exit
+  -p, --port PORT       port of the ROBO TX Controller: /dev/ttyACM0 (USB),
+                        /dev/rfcomm0 (Bluetooth via rfcomm),
+                        bt:00:13:7B:53:DB:5E (Bluetooth directly, Linux) or
+                        COM3 (Windows); default: the first ROBO TX Controller
+                        found on USB
+  -v, --verbose         also show the shell commands sent to the controller
 ```
 
 | Command | What it does |
 | ------- | ------------ |
-| `deploy build/ButtonLamp.bin` | Stop the running program, upload to the RAM disk, load and start |
-| `deploy --flash build/ButtonLamp.bin` | The same, but keep it on the flash disk |
-| `upload build/ButtonLamp.bin` | Only upload (`--flash` for the flash disk, `--name` for another file name) |
-| `load /ramdisk/ButtonLamp.bin` | Load a program that's already on the controller |
+| `deploy [--flash] [--name NAME] FILE` | Stop the running program, upload FILE, load and start it |
+| `upload [--flash] [--name NAME] FILE` | Only upload FILE |
+| `load PATH` | Load a program that's already on the controller, e.g. `/ramdisk/ButtonLamp.bin` |
 | `run` / `stop` | Start / stop the loaded program |
-| `dir ramdisk`, `dir flash` | List a disk |
-| `del /flash/ButtonLamp.bin` | Delete a file |
+| `dir [DISK]` | List a disk: `ramdisk`, `flash` or `system` (default: all) |
+| `del PATH` | Delete a file, e.g. `/flash/ButtonLamp.bin` |
 | `shell` | Type the controller's own shell commands (`help` lists them) |
+
+Options of `deploy` and `upload`:
+
+- **`--flash`**: store on the flash disk, which keeps it when the controller is switched off (default: RAM disk).
+- **`--name NAME`**: file name on the controller (default: the name on the PC).
+
+```text
+usage: ftrobotx-load deploy [-h] [--flash] [--name NAME] file
+
+positional arguments:
+  file         program file (.bin)
+
+options:
+  -h, --help   show this help message and exit
+  --flash      store on the flash disk (kept when switched off)
+  --name NAME  file name on the controller (default: as on the PC)
+```
 
 On Windows, run it as `python tools\ftrobotx-load …`.
 

@@ -345,8 +345,10 @@ def main():
         description=__doc__.split("\n\n")[0],
         epilog="\n\n".join(__doc__.split("\n\n")[1:]),
         formatter_class=argparse.RawDescriptionHelpFormatter)
-    parser.add_argument("-p", "--port", help="/dev/ttyACM0, /dev/rfcomm0 or bt:XX:XX:XX:XX:XX:XX (default: USB)")
-    parser.add_argument("-v", "--verbose", action="store_true", help="show the shell commands sent")
+    parser.add_argument("-p", "--port", help="port of the ROBO TX Controller: /dev/ttyACM0 (USB), /dev/rfcomm0 "
+                        "(Bluetooth via rfcomm), bt:00:13:7B:53:DB:5E (Bluetooth directly, Linux) or COM3 (Windows); "
+                        "default: the first ROBO TX Controller found on USB")
+    parser.add_argument("-v", "--verbose", action="store_true", help="also show the shell commands sent to the controller")
     commands = parser.add_subparsers(dest="command", required=True)
 
     deploy = commands.add_parser("deploy", help="stop the running program, upload, load and start a program")
@@ -368,7 +370,10 @@ def main():
 
     connection = None
     try:
-        port = args.port or find_usb_controller()
+        port = args.port
+        if not port:
+            port = find_usb_controller()
+            print(f"Using {port} (ROBO TX Controller on USB)", file=sys.stderr)
         connection = open_connection(port)
         shell = Shell(connection, args.verbose)
 

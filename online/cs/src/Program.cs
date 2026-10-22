@@ -2,18 +2,18 @@ using System.IO.Ports;
 using FtRoboTx;
 using FtRoboTx.Extensions;
 
-// Usage: dotnet run [port], e.g. /dev/ttyACM0 (USB), /dev/rfcomm0 (Bluetooth) or COM3
-string[] ports = SerialPort.GetPortNames();
-foreach (string port in ports)
-{
-    Console.WriteLine(port);
-}
-
-string? portName = args.Length > 0 ? args[0] : ports.FirstOrDefault();
+// Usage: dotnet run -- [-p PORT]; --help explains the options.
+string? portName = CommandLine.ParsePort(args, "FtRoboTx",
+    "The original demo: master and extension 1; a motor on M3 of the extension (M1 synchronized to it), and the\n" +
+    "button on I8 of the master starts a distance run of M1. Lists the serial ports found. Ctrl+C quits.",
+    out int exitCode);
 if (portName is null)
 {
-    Console.Error.WriteLine("No serial port found.");
-    return 1;
+    return exitCode;
+}
+foreach (string port in SerialPort.GetPortNames())
+{
+    Console.WriteLine(port);
 }
 
 using CancellationTokenSource cts = new();

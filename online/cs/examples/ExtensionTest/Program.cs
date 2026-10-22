@@ -1,13 +1,19 @@
 // Master and one extension, each with a button on I1 and a lamp on O1, wired crosswise:
 // the master's button switches the extension's lamp and the other way round.
-// Usage: dotnet run [port], default /dev/ttyACM0 (USB)
+// Usage: dotnet run -- [-p PORT]; --help explains the options.
 using FtRoboTx;
 using FtRoboTx.Extensions;
 
 const short On = 512;
 ExtensionIndex[] controllers = [ExtensionIndex.Local, ExtensionIndex.Slave1];
 
-string portName = args.Length > 0 ? args[0] : "/dev/ttyACM0";
+string? portName = CommandLine.ParsePort(args, "ExtensionTest",
+    "Master and extension 1, each with a button on I1 and a lamp on O1, crosswise: each button switches the\n" +
+    "other controller's lamp. Ctrl+C quits and switches the lamps off.", out int exitCode);
+if (portName is null)
+{
+    return exitCode;
+}
 
 using CancellationTokenSource cts = new();
 Console.CancelKeyPress += (_, e) =>
@@ -51,3 +57,5 @@ finally
     ft.StopAllOutputs();
     ft.Update();
 }
+
+return 0;

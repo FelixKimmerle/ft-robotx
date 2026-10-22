@@ -1,11 +1,14 @@
 // Lamp on O1 is on while the button on I1 is pressed.
-// Usage: ftrobotx_button_lamp [port], default /dev/ttyACM0 (USB)
+// Usage: ftrobotx_button_lamp [-p PORT]; --help explains the options.
 #include <csignal>
 #include <exception>
 #include <iostream>
 #include <optional>
 
+#include "Cli.hpp"
 #include "ftrobotx/FtConnection.hpp"
+
+#define DESCRIPTION "Lamp on O1 lights while the button on I1 is pressed. Ctrl+C quits and switches the lamp off."
 
 namespace
 {
@@ -25,9 +28,21 @@ int main(int argc, char* argv[])
 {
     using namespace ftrobotx;
 
+    std::string portOption;
+    int exitCode = 0;
+    if (!cli::parse(argc, argv, "[-p PORT]", DESCRIPTION, {{"-p", "--port", "PORT", cli::kPortHelp, &portOption}},
+                    nullptr, exitCode))
+    {
+        return exitCode;
+    }
+
     try
     {
-        std::string portName = argc > 1 ? argv[1] : "/dev/ttyACM0";
+        std::string portName = cli::choosePort(portOption);
+        if (portName.empty())
+        {
+            return 1;
+        }
         std::signal(SIGINT, onSignal);
 
         FtConnection ft(portName);

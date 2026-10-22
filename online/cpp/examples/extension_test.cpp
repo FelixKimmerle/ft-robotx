@@ -1,13 +1,18 @@
 // Master and one extension, each with a button on I1 and a lamp on O1, wired crosswise:
 // the master's button switches the extension's lamp and the other way round.
-// Usage: ftrobotx_extension_test [port], default /dev/ttyACM0 (USB)
+// Usage: ftrobotx_extension_test [-p PORT]; --help explains the options.
 #include <array>
 #include <csignal>
 #include <exception>
 #include <iostream>
 #include <optional>
 
+#include "Cli.hpp"
 #include "ftrobotx/FtConnection.hpp"
+
+#define DESCRIPTION                                                                                                    \
+    "Master and extension 1, each with a button on I1 and a lamp on O1, crosswise: each button switches the\n"         \
+    "other controller's lamp. Ctrl+C quits and switches the lamps off."
 
 namespace
 {
@@ -34,9 +39,21 @@ int main(int argc, char* argv[])
 
     constexpr std::array controllers{ExtensionIndex::Local, ExtensionIndex::Slave1};
 
+    std::string portOption;
+    int exitCode = 0;
+    if (!cli::parse(argc, argv, "[-p PORT]", DESCRIPTION, {{"-p", "--port", "PORT", cli::kPortHelp, &portOption}},
+                    nullptr, exitCode))
+    {
+        return exitCode;
+    }
+
     try
     {
-        std::string portName = argc > 1 ? argv[1] : "/dev/ttyACM0";
+        std::string portName = cli::choosePort(portOption);
+        if (portName.empty())
+        {
+            return 1;
+        }
         std::signal(SIGINT, onSignal);
 
         FtConnection ft(portName, controllers.size());

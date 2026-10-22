@@ -1,9 +1,14 @@
-// Same demo as cs/src/Program.cs. Usage: ftrobotx_demo [port]
+// Same demo as online/cs/src/Program.cs. Usage: ftrobotx_demo [-p PORT]; --help explains the options.
 #include <csignal>
 #include <exception>
 #include <iostream>
 
+#include "Cli.hpp"
 #include "ftrobotx/FtConnection.hpp"
+
+#define DESCRIPTION                                                                                                    \
+    "The original demo: master and extension 1; a motor on M3 of the extension (M1 synchronized to it), and the\n"     \
+    "button on I8 of the master starts a distance run of M1. Lists the ports found. Ctrl+C quits."
 
 namespace
 {
@@ -21,26 +26,24 @@ int main(int argc, char* argv[])
 {
     using namespace ftrobotx;
 
+    std::string portOption;
+    int exitCode = 0;
+    if (!cli::parse(argc, argv, "[-p PORT]", DESCRIPTION, {{"-p", "--port", "PORT", cli::kPortHelp, &portOption}},
+                    nullptr, exitCode))
+    {
+        return exitCode;
+    }
+
     try
     {
-        std::vector<SerialPort::PortInfo> ports = SerialPort::listPorts();
-        for (const SerialPort::PortInfo& port : ports)
+        for (const SerialPort::PortInfo& port : SerialPort::listPorts())
         {
             std::cout << port.name << "  " << port.description << '\n';
         }
 
-        std::string portName;
-        if (argc > 1)
+        std::string portName = cli::choosePort(portOption);
+        if (portName.empty())
         {
-            portName = argv[1];
-        }
-        else if (!ports.empty())
-        {
-            portName = ports.front().name;
-        }
-        else
-        {
-            std::cerr << "No serial port found.\n";
             return 1;
         }
 

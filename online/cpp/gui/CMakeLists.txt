@@ -40,6 +40,7 @@ add_executable(ftrobotx_gui
     DeviceWorker.cpp
 )
 target_link_libraries(ftrobotx_gui PRIVATE ftrobotx::ftrobotx imgui)
+target_include_directories(ftrobotx_gui PRIVATE ${PROJECT_SOURCE_DIR}/examples) # Cli.hpp
 ftrobotx_set_warnings(ftrobotx_gui)
 
 if(WIN32)

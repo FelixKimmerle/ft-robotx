@@ -1,11 +1,16 @@
 // Lamp on O1 is on while the button on I1 is pressed.
-// Usage: dotnet run [port], default /dev/ttyACM0 (USB)
+// Usage: dotnet run -- [-p PORT]; --help explains the options.
 using FtRoboTx;
 using FtRoboTx.Extensions;
 
 const short On = 512;
 
-string portName = args.Length > 0 ? args[0] : "/dev/ttyACM0";
+string? portName = CommandLine.ParsePort(args, "ButtonLamp",
+    "Lamp on O1 lights while the button on I1 is pressed. Ctrl+C quits and switches the lamp off.", out int exitCode);
+if (portName is null)
+{
+    return exitCode;
+}
 
 using CancellationTokenSource cts = new();
 Console.CancelKeyPress += (_, e) =>
@@ -38,3 +43,5 @@ finally
     ft.StopAllOutputs();
     ft.Update();
 }
+
+return 0;

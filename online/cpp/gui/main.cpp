@@ -1,5 +1,5 @@
 // ft-robotx test tool: shows and controls all inputs, outputs and counters of a master and its extensions.
-// Usage: ftrobotx_gui [port [extensions]]; with a port given, it connects right away.
+// Usage: ftrobotx_gui [-p PORT] [-e N]; --help explains the options.
 #include <cstdio>
 #include <string>
 
@@ -10,9 +10,28 @@
 #include <imgui_impl_sdlrenderer3.h>
 
 #include "App.hpp"
+#include "Cli.hpp"
 
 int main(int argc, char* argv[])
 {
+    std::string portOption;
+    std::string extensionsOption = "1";
+    int exitCode = 0;
+    if (!cli::parse(
+            argc, argv, "[-p PORT] [-e N]",
+            "Test tool: shows and controls the inputs, outputs, counters and display of a ROBO TX Controller\n"
+            "and its extensions. Without -p, choose the port in the window and press Connect.",
+            {{"-p", "--port", "PORT",
+              "Connect right away to this port: /dev/ttyACM0 (USB), /dev/rfcomm0 (Bluetooth via\n"
+              "                        rfcomm), bt:00:13:7B:53:DB:5E (Bluetooth directly, Linux) or COM3 (Windows).",
+              &portOption},
+             {"-e", "--extensions", "N", "Number of extensions behind the master, 0 ... 8 (default: 1).",
+              &extensionsOption}},
+            nullptr, exitCode))
+    {
+        return exitCode;
+    }
+
     if (!SDL_Init(SDL_INIT_VIDEO))
     {
         std::fprintf(stderr, "SDL_Init failed: %s\n", SDL_GetError());
@@ -24,9 +43,8 @@ int main(int argc, char* argv[])
     {
         scale = 1;
     }
-    SDL_Window* window =
-        SDL_CreateWindow("ft-robotx", static_cast<int>(1100 * scale), static_cast<int>(640 * scale),
-                         SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
+    SDL_Window* window = SDL_CreateWindow("ft-robotx", static_cast<int>(1100 * scale), static_cast<int>(640 * scale),
+                                          SDL_WINDOW_RESIZABLE | SDL_WINDOW_HIDDEN | SDL_WINDOW_HIGH_PIXEL_DENSITY);
     if (window == nullptr)
     {
         std::fprintf(stderr, "SDL_CreateWindow failed: %s\n", SDL_GetError());
@@ -72,7 +90,7 @@ int main(int argc, char* argv[])
     const Uint64 screenshotAt = SDL_GetTicks() + 3000;
 
     {
-        App app(argc > 1 ? argv[1] : "", argc > 2 ? SDL_atoi(argv[2]) : 1);
+        App app(portOption, SDL_atoi(extensionsOption.c_str()));
 
         bool done = false;
         while (!done)
