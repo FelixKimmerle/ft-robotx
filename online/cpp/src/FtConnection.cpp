@@ -342,6 +342,37 @@ void FtConnection::sendRequest(Packet& packet)
         std::cerr << "> " << toHex(data) << '\n';
     }
     serialPort_.write(data);
+
+    // The controller can't take the next packet while it handles a Bluetooth command: it sends part of it back and
+    // may drop it (measured). So wait for the immediate reply, like ftMscLib, which handles one request at a time.
+    // Connect is the exception: it only answers once the connection is up or failed, seconds later.
+    if (packet.commandCode() == BtPacket::kConnect)
+    {
+        return;
+    }
+    std::int32_t expected = packet.commandCode() + 100;
+    for (;;)
+    {
+        std::vector<std::uint8_t> reply;
+        try
+        {
+            reply = readPacket(0);
+        }
+        catch (const TimeoutError&)
+        {
+            return; // sometimes the controller doesn't confirm (measured); the next exchange goes on anyway
+        }
+        std::int32_t code = reply[16] | reply[17] << 8 | reply[18] << 16 | reply[19] << 24;
+        if (!BtPacket::isReply(code))
+        {
+            throw ProtocolError("Unexpected packet while waiting for a Bluetooth reply: " + toHex(reply));
+        }
+        queueBtReply(reply);
+        if (code == expected)
+        {
+            return;
+        }
+    }
 }
 
 void FtConnection::sendPacket(Packet& packet, Response& response)
@@ -349,33 +380,68 @@ void FtConnection::sendPacket(Packet& packet, Response& response)
     packet.setSessionId(sessionId_);
     packet.setTransactionId(transactionId_);
     std::vector<std::uint8_t> data = packet.bytes();
-    if (trace_)
-    {
-        std::cerr << "> " << toHex(data) << '\n';
-    }
-    serialPort_.write(data);
 
-    // Bluetooth replies and reports may come first; they are queued for the callbacks.
-    std::vector<std::uint8_t> receivedData;
-    for (;;)
+    // Under heavy Bluetooth traffic the controller sometimes loses a reply or parts of it (measured: received
+    // messages it reports by itself get in the way). Every online packet carries state (outputs, configuration,
+    // command ids), so sending it again is safe.
+    constexpr int kAttempts = 3;
+    for (int attempt = 1;; ++attempt)
     {
-        receivedData = readPacket(response.length());
-        std::int32_t code = receivedData[16] | receivedData[17] << 8 | receivedData[18] << 16 | receivedData[19] << 24;
-        if (!BtPacket::isReply(code))
+        if (trace_)
         {
+            std::cerr << "> " << toHex(data) << '\n';
+        }
+        serialPort_.write(data);
+        try
+        {
+            std::vector<std::uint8_t> receivedData = readReply(packet.commandCode() + 100, response);
+            response.load(receivedData);
             break;
         }
-        queueBtReply(receivedData);
+        catch (const std::runtime_error& e) // TimeoutError, ProtocolError
+        {
+            if (attempt == kAttempts)
+            {
+                throw;
+            }
+            if (trace_)
+            {
+                std::cerr << "retrying after: " << e.what() << '\n';
+            }
+        }
     }
-    if (receivedData.size() != response.length())
-    {
-        throw ProtocolError("Unexpected response of " + std::to_string(receivedData.size()) + " bytes (expected " +
-                            std::to_string(response.length()) + "): " + toHex(receivedData));
-    }
-
-    response.load(receivedData);
     sessionId_ = response.sessionId();
     transactionId_ = static_cast<std::uint16_t>(response.transactionId() + 1);
+}
+
+std::vector<std::uint8_t> FtConnection::readReply(std::int32_t expectedCode, const Response& response)
+{
+    // Bluetooth replies and reports may come first; they are queued for the callbacks. A late reply to an earlier
+    // attempt (see sendPacket) is skipped.
+    for (;;)
+    {
+        std::vector<std::uint8_t> receivedData = readPacket(response.length());
+        std::int32_t code = receivedData[16] | receivedData[17] << 8 | receivedData[18] << 16 | receivedData[19] << 24;
+        if (BtPacket::isReply(code))
+        {
+            queueBtReply(receivedData);
+            continue;
+        }
+        if (code != expectedCode)
+        {
+            if (trace_)
+            {
+                std::cerr << "skipping a late reply (telecode " << code << ")\n";
+            }
+            continue;
+        }
+        if (receivedData.size() != response.length())
+        {
+            throw ProtocolError("Unexpected response of " + std::to_string(receivedData.size()) + " bytes (expected " +
+                                std::to_string(response.length()) + "): " + toHex(receivedData));
+        }
+        return receivedData;
+    }
 }
 
 std::vector<std::uint8_t> FtConnection::readPacket(std::size_t expectedLength)

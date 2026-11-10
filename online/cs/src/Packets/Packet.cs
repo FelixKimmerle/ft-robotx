@@ -17,6 +17,8 @@ public abstract class Packet
         set => Header.TransactionId = value;
     }
 
+    public int CommandCode => Header.CommandCode;
+
     protected virtual void WritePayload(BinaryWriter writer) { }
 
     public byte[] GetBytes()

@@ -4,5 +4,5 @@ obj/
 .vscode/
 online/cpp/build*/
 offline/build*/
-hybrid/*/build*/
+hybrid/**/build*/
 __pycache__/

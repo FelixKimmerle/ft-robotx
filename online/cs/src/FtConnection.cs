@@ -389,8 +389,10 @@ public sealed class FtConnection : IDisposable
         }
     }
 
-    /// <summary>Sends a packet without waiting for a reply (Bluetooth commands; their replies come as events).</summary>
-    private void SendRequest(Packet packet)
+    /// <summary>
+    /// Sends a Bluetooth command. Its results come as events; only the immediate reply is waited for.
+    /// </summary>
+    private void SendRequest(BtPacket packet)
     {
         packet.SessionId = sessionId;
         packet.TransactionId = 0; // like ftMscLib for Bluetooth commands; the reply doesn't advance the ids
@@ -400,6 +402,38 @@ public sealed class FtConnection : IDisposable
             Console.Error.WriteLine($"> {Convert.ToHexString(data)}");
         }
         serialPort.Write(data, 0, data.Length);
+
+        // The controller can't take the next packet while it handles a Bluetooth command: it sends part of it back
+        // and may drop it (measured). So wait for the immediate reply, like ftMscLib, which handles one request at a
+        // time. Connect is the exception: it only answers once the connection is up or failed, seconds later.
+        if (packet.CommandCode == BtPacket.Connect)
+        {
+            return;
+        }
+        int expected = packet.CommandCode + 100;
+        while (true)
+        {
+            byte[] reply;
+            try
+            {
+                reply = ReadPacket(0);
+            }
+            catch (TimeoutException)
+            {
+                return; // sometimes the controller doesn't confirm (measured); the next exchange goes on anyway
+            }
+            int code = BinaryPrimitives.ReadInt32LittleEndian(reply.AsSpan(16));
+            if (!BtPacket.IsReply(code))
+            {
+                throw new InvalidOperationException(
+                    $"Unexpected packet while waiting for a Bluetooth reply: {Convert.ToHexString(reply)}");
+            }
+            QueueBtReply(reply);
+            if (code == expected)
+            {
+                return;
+            }
+        }
     }
 
     private void SendPacket(Packet packet, Response response)
@@ -407,32 +441,65 @@ public sealed class FtConnection : IDisposable
         packet.SessionId = sessionId;
         packet.TransactionId = transactionId;
         byte[] data = packet.GetBytes();
-        if (trace)
-        {
-            Console.Error.WriteLine($"> {Convert.ToHexString(data)}");
-        }
-        serialPort.Write(data, 0, data.Length);
 
-        // Bluetooth replies and reports may come first; they are queued for the events.
-        byte[] receivedData;
-        while (true)
+        // Under heavy Bluetooth traffic the controller sometimes loses a reply or parts of it (measured: received
+        // messages it reports by itself get in the way). Every online packet carries state (outputs, configuration,
+        // command ids), so sending it again is safe.
+        const int attempts = 3;
+        for (int attempt = 1; ; attempt++)
         {
-            receivedData = ReadPacket(response.Length);
-            if (!BtPacket.IsReply(BinaryPrimitives.ReadInt32LittleEndian(receivedData.AsSpan(16))))
+            if (trace)
             {
+                Console.Error.WriteLine($"> {Convert.ToHexString(data)}");
+            }
+            serialPort.Write(data, 0, data.Length);
+            try
+            {
+                response.Load(ReadReply(packet.CommandCode + 100, response));
                 break;
             }
-            QueueBtReply(receivedData);
+            catch (Exception e) when (attempt < attempts && e is TimeoutException or InvalidOperationException)
+            {
+                if (trace)
+                {
+                    Console.Error.WriteLine($"retrying after: {e.Message}");
+                }
+            }
         }
-        if (receivedData.Length != response.Length)
-        {
-            throw new InvalidOperationException(
-                $"Unexpected response of {receivedData.Length} bytes (expected {response.Length}): {Convert.ToHexString(receivedData)}");
-        }
-
-        response.Load(receivedData);
         sessionId = response.SessionId;
         transactionId = (ushort)(response.TransactionId + 1);
+    }
+
+    /// <summary>
+    /// Reads the reply (telecode <paramref name="expectedCode"/>) for <paramref name="response"/>, queueing Bluetooth
+    /// packets that come before it. A late reply to an earlier attempt (see SendPacket) is skipped.
+    /// </summary>
+    private byte[] ReadReply(int expectedCode, Response response)
+    {
+        while (true)
+        {
+            byte[] receivedData = ReadPacket(response.Length);
+            int code = BinaryPrimitives.ReadInt32LittleEndian(receivedData.AsSpan(16));
+            if (BtPacket.IsReply(code))
+            {
+                QueueBtReply(receivedData);
+                continue;
+            }
+            if (code != expectedCode)
+            {
+                if (trace)
+                {
+                    Console.Error.WriteLine($"skipping a late reply (telecode {code})");
+                }
+                continue;
+            }
+            if (receivedData.Length != response.Length)
+            {
+                throw new InvalidOperationException(
+                    $"Unexpected response of {receivedData.Length} bytes (expected {response.Length}): {Convert.ToHexString(receivedData)}");
+            }
+            return receivedData;
+        }
     }
 
     /// <summary>Reads the next packet from the controller, skipping bytes until the 02 55 start.</summary>

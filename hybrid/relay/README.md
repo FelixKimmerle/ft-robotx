@@ -14,7 +14,8 @@ same time. (`hybrid/direct/` is reserved for a later attempt without the relay, 
 protocol itself.)
 
 Status: the online-mode commands for Bluetooth messages are reverse engineered and in the libraries (C++ and C#),
-tested with two controllers. The local program and VM on the model TX don't exist yet.
+tested with two controllers. On the model TX, an echo program ([`tx/bt_echo.c`](tx/bt_echo.c)) answers messages
+for measurements. The command protocol and the VM don't exist yet.
 
 ## Using it from the libraries
 
@@ -48,8 +49,12 @@ come straight back, good for testing with one controller.
 ## Example: `ftrobotx_bt_ping`
 
 [`examples/bt_ping.cpp`](examples/bt_ping.cpp) sends numbered messages from one TX to another and back, measures the
-round trip, then sends a burst to measure messages per second. With `-r PORT`, the second TX listens and answers;
-both are driven from the PC in online mode. Without `-r`, the first TX talks to itself (loopback).
+round trip, then sends a burst to measure messages per second. The second TX can answer in three ways:
+
+- `-a ADDRESS`: it runs the echo program [`tx/bt_echo.c`](tx/bt_echo.c), the real hybrid setup (only the relay
+  talks to the PC).
+- `-r PORT`: it is driven from the PC in online mode too, and the PC echoes the messages.
+- neither: the first TX talks to itself (loopback).
 
 ```bash
 cd hybrid/relay && cmake -S . -B build -G Ninja && ninja -C build
@@ -64,6 +69,24 @@ cd hybrid/relay && cmake -S . -B build -G Ninja && ninja -C build
 ```
 
 This project includes the online library with `add_subdirectory(../../online/cpp)`, the way your own project would.
+
+## Programs for the model TX: `tx/`
+
+C programs for the controller behind the relay, built with the offline SDK (`../../../offline`, ARM cross
+toolchain). The model TX only accepts a connection from the relay; set its address at configure time:
+
+```bash
+cd hybrid/relay/tx && cmake -S . -B build -G Ninja -DFT_RELAY_ADDRESS=00:13:7B:53:DB:5E && ninja -C build
+```
+
+```bash
+../../offline/tools/ftrobotx-load --port bt:00:13:7B:48:B2:E2 deploy tx/build/BtEcho.bin   # from hybrid/relay
+```
+
+`BtEcho` listens for the relay on channel 1, starts receiving once connected, sends every message back from the
+receive callback (as fischertechnik's StopGoBt demo does) and listens again after a disconnect. Messages, failed
+sends and the last status are shown on the display. While it runs, don't talk to that TX in online mode: that stops
+the program.
 
 ## The protocol
 
@@ -103,6 +126,13 @@ Replies (telecode + 100), after the count field:
 So the libraries read whole packets by their length field, queue every telecode 110 ... 118 as an event, and only
 the expected reply ends the wait for a normal online-mode command. Events reach the callbacks from `update()`.
 
+**One request at a time.** If the next packet follows a Bluetooth command right away, the controller sends parts of
+it back (garbage on the line) and may drop it, which shows up as a lost reply. ftMscLib handles one request at a
+time, and so do the libraries: after a Bluetooth command they wait for its immediate reply (connect excepted, which
+has none). Under heavy traffic (hundreds of received messages per second) the controller still loses an online
+reply or parts of it now and then; the libraries skip the broken bytes and send the packet again. That is safe
+because every online packet carries state (outputs, configuration, command ids).
+
 ### Setting up a connection
 
 1. Receiver: listen (17) with the **sender's** address. Without it, a connection attempt fails with status 16
@@ -118,33 +148,34 @@ or "already receiving". Disconnect / stop listening first.
 
 ## Measurements
 
-Firmware 1.30. TX-A on USB as sender, ROBO TX-618 as receiver, 2026-11-10.
+Firmware 1.30. TX-A (relay) on USB as sender, ROBO TX-618 as receiver, 2026-11-10.
 
 | What | Result |
 | ---- | ------ |
 | Largest message | **16 bytes.** Longer messages (the firmware takes up to 255) arrive cut to their first 16 bytes, not split. The libraries refuse longer ones. |
-| Connect | 2.2–3.7 s |
-| Loopback, one TX on USB | round trip 3.4 ms, 300 messages/s |
-| TX-A → TX-618 → TX-A, relayed by the PC | round trip 210–450 ms, average 260–300 ms |
-| Burst TX-A → TX-618, next message after the confirmation | 2–7 messages/s |
-| Lost confirmations | about 1 in 12–40 messages: the message arrives, but the sender never gets its 114 |
+| Connect | 1.7–3.7 s |
+| **TX-618 runs BtEcho** (`-a`): round trip PC → relay → model → relay → PC | **average 23–24 ms**, 17–48 ms; about 1 in 50–300 pings lost |
+| **TX-618 runs BtEcho**: burst, next message after the send confirmation | **220–240 messages/s** (about 3.7 KB/s), all arrive |
+| Loopback, one TX on USB | round trip 3.4 ms, 280–300 messages/s |
+| TX-618 driven by the PC in online mode over Bluetooth (`-r`) | round trip 210–450 ms, 2–7 messages/s: the PC polls TX-618 at ~12 cycles/s and its radio carries both links |
 
-The round trip and the burst rate are worst cases. TX-618 was connected to the PC over Bluetooth online mode at the
-same time, so its radio carried both links, and the PC polled it at only ~12 cycles/s. A model TX with a local
-program has no PC link. Its rate needs measuring with a local program.
+Before the libraries waited for each Bluetooth command's reply, confirmations were lost (about 1 in 12–40) and
+online replies timed out; most of that came from sending too early (see above). Sustained bursts of several hundred
+messages per second can still break the TX-to-TX connection without a disconnect report (every send then answers
+status 7) and leave the echo program needing a restart. Normal traffic is far below that.
 
 What this means for the hybrid protocol:
 
 - **Frames of at most 16 bytes.** A program upload needs fragmentation: sequence number, fragment index, checksum.
-- **Don't wait for the send confirmation.** It is sometimes lost. Use our own sequence numbers and acknowledgements
-  with timeouts, and resend.
-- A few messages per second through the relay is too slow for closed-loop control from the PC. Control has to run
-  on the model TX. The PC sends programs and parameters, the model sends telemetry in batches.
+- **Our own sequence numbers, acknowledgements and resends**, not the firmware's send confirmation alone; plus a
+  watchdog on both sides, since a connection can die silently.
+- **Commands at ~20 ms round trip** are fine for setting outputs and reading values from the PC (and for XCP), but
+  not for closed-loop control of a fast line follower. That runs on the model TX (the VM); the PC sends commands,
+  programs and parameters, the model sends values when they change or at a requested rate.
 
 ## Still unknown
 
 - Telecodes 19 and 20 (answer with 8 bytes, probably status queries such as `StatusBtConnection`), and 3 and 4
   (answer only with a payload; maybe I2C or memory layout). The other objects in the static library (`I2cApi.obj`,
   `ftRemote.obj`, `ftFileTrans.obj`) describe I2C, the remote shell and file transfer the same way.
-- Message rate and latency between two controllers without a PC link (needs the local program).
 - Whether the relay keeps up while the PC also polls its inputs at full rate.

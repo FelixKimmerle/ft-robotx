@@ -167,6 +167,8 @@ class FtConnection
     void notify();
     /// Sends a packet without waiting for a reply (Bluetooth commands; their replies come as events).
     void sendRequest(Packet& packet);
+    /// Reads the reply (telecode `expectedCode`) for `response`, queueing Bluetooth packets that come before it.
+    [[nodiscard]] std::vector<std::uint8_t> readReply(std::int32_t expectedCode, const Response& response);
     /// Reads the next packet from the controller, skipping bytes until the 02 55 start.
     [[nodiscard]] std::vector<std::uint8_t> readPacket(std::size_t expectedLength);
     /// Queues a Bluetooth reply/report for the callbacks.
