@@ -15,15 +15,55 @@ protocol itself.)
 
 Status: the online-mode commands for Bluetooth messages are reverse engineered and in the libraries (C++ and C#),
 tested with two controllers. On the model TX, an echo program ([`tx/bt_echo.c`](tx/bt_echo.c)) answers messages
-for measurements. The command protocol and the VM don't exist yet.
+for measurements, and `RelayModel` ([`tx/relay_model.c`](tx/relay_model.c)) carries out commands from the PC (see
+[Relay protocol](#relay-protocol-commands-to-the-model-tx)). The VM with control flow doesn't exist yet.
+
+## Setup: two controllers, two addresses
+
+| Role | Connected to | Runs | Example (our test setup) |
+| ---- | ------------ | ---- | ------------------------ |
+| **Relay TX** | the PC, over USB (or Bluetooth) | nothing, it stays in online mode | ROBO TX-A, `00:13:7B:53:DB:5E`, on `/dev/ttyACM0` |
+| **Model TX** | only the relay, over Bluetooth | `RelayModel` (or `BtEcho` for measurements) | ROBO TX-618, `00:13:7B:48:B2:E2` |
+
+Which address goes where:
+
+- **Building the model's program** (`-DFT_RELAY_ADDRESS=...`): the **relay's** address. The model only accepts a
+  connection from that controller.
+- **Uploading to the model** (`ftrobotx-load --port bt:...`): the **model's** address (or its USB port).
+- **The PC programs** (`-a ...`, `parseBtAddress(...)` for `RelayConnection`): the **model's** address. The PC talks
+  to the relay over its port (`-p`) and tells it whom to connect to. Giving the relay's own address there connects
+  the relay to itself (loopback); the examples refuse that.
+
+A controller's address: `bluetoothctl devices` lists the paired ones; the test tool (`ftrobotx_gui`) shows the MAC of
+a connected controller; ROBO TX addresses start with `00:13:7B`.
+
+Quick start (from `hybrid/relay`, with the addresses above):
+
+```bash
+cmake -S . -B build -G Ninja && ninja -C build                                          # PC programs
+```
+
+```bash
+cmake -S tx -B tx/build -G Ninja -DFT_RELAY_ADDRESS=00:13:7B:53:DB:5E && ninja -C tx/build  # model program; relay's address
+```
+
+```bash
+../../offline/tools/ftrobotx-load --port bt:00:13:7B:48:B2:E2 deploy tx/build/RelayModel.bin   # upload to the model
+```
+
+```bash
+./build/ftrobotx_relay_button_lamp -p /dev/ttyACM0 -a 00:13:7B:48:B2:E2   # -p: relay's port, -a: model's address
+```
+
+The button on I1 of the relay now switches the lamp on O1 of the model.
 
 ## Using it from the libraries
 
 C++ (`#include <ftrobotx/FtConnection.hpp>`):
 
 ```cpp
-FtConnection relay("/dev/ttyACM0");
-BtAddress model = *parseBtAddress("00:13:7B:48:B2:E2");
+FtConnection relay("/dev/ttyACM0");                       // the relay's port
+BtAddress model = *parseBtAddress("00:13:7B:48:B2:E2");   // the model's address
 
 relay.setBtCallback([&](const BtEvent& event) {
     if (event.command == BtCommand::Connect && event.status == BtStatus::Success)
@@ -51,9 +91,10 @@ come straight back, good for testing with one controller.
 [`examples/bt_ping.cpp`](examples/bt_ping.cpp) sends numbered messages from one TX to another and back, measures the
 round trip, then sends a burst to measure messages per second. The second TX can answer in three ways:
 
-- `-a ADDRESS`: it runs the echo program [`tx/bt_echo.c`](tx/bt_echo.c), the real hybrid setup (only the relay
-  talks to the PC).
-- `-r PORT`: it is driven from the PC in online mode too, and the PC echoes the messages.
+- `-a ADDRESS` (the **model's** address): it runs the echo program [`tx/bt_echo.c`](tx/bt_echo.c), the real hybrid
+  setup (only the relay talks to the PC).
+- `-r PORT` (the **second controller's** port): it is driven from the PC in online mode too, and the PC echoes the
+  messages.
 - neither: the first TX talks to itself (loopback).
 
 ```bash
@@ -65,6 +106,10 @@ cd hybrid/relay && cmake -S . -B build -G Ninja && ninja -C build
 ```
 
 ```bash
+./build/ftrobotx_bt_ping -a 00:13:7B:48:B2:E2        # relay on USB, the model (TX-618) runs BtEcho
+```
+
+```bash
 ./build/ftrobotx_bt_ping -r bt:00:13:7B:48:B2:E2     # TX on USB sends, TX-618 (Bluetooth, online) answers
 ```
 
@@ -73,11 +118,15 @@ This project includes the online library with `add_subdirectory(../../online/cpp
 ## Programs for the model TX: `tx/`
 
 C programs for the controller behind the relay, built with the offline SDK (`../../../offline`, ARM cross
-toolchain). The model TX only accepts a connection from the relay; set its address at configure time:
+toolchain). The model TX only accepts a connection from the relay, so the **relay's** address goes in at configure
+time:
 
 ```bash
 cd hybrid/relay/tx && cmake -S . -B build -G Ninja -DFT_RELAY_ADDRESS=00:13:7B:53:DB:5E && ninja -C build
 ```
+
+Upload to the **model** (its Bluetooth address, or its USB port); this builds `BtEcho` and `RelayModel`, upload the
+one you need:
 
 ```bash
 ../../offline/tools/ftrobotx-load --port bt:00:13:7B:48:B2:E2 deploy tx/build/BtEcho.bin   # from hybrid/relay
@@ -88,7 +137,67 @@ receive callback (as fischertechnik's StopGoBt demo does) and listens again afte
 sends and the last status are shown on the display. While it runs, don't talk to that TX in online mode: that stops
 the program.
 
-## The protocol
+## Relay protocol: commands to the model TX
+
+[`protocol/relay_protocol.h`](protocol/relay_protocol.h) (plain C, used by both sides) defines the frames the PC
+sends through the relay to the model TX, and back. Each frame is one Bluetooth message: `[op][seq][arguments]`, at
+most 16 bytes. The commands are written as instructions (opcode + fixed arguments), so they can become instructions
+of a VM with control flow later.
+
+- **Commands** (PC → model): `HELLO`, `PING`, `SET_PWM`, `SET_MOTOR`, `MOTOR_DISTANCE`, `MOTOR_SYNC`, `STOP_MOTOR`,
+  `STOP_ALL`, `RESET_COUNTER`, `INPUT_MODE`, `MOTOR_MODE`, `COUNTER_MODE`, `READ`, `SUBSCRIBE`, `TEXT`. Each names
+  the controller on the model's side (0 = the model TX, 1 ... 8 = its extensions) and is answered with `ACK` (seq,
+  status, data).
+- **Values** (model → PC): `VALUES` frames with up to 5 signals of one controller. Signals: I1–I8, C1–C4 (values
+  and levels), the display buttons, "motor command done" for M1–M4. `SUBSCRIBE` sends changed signals at most every
+  interval, all of them once a second.
+- **Reliability**: one command in flight; resent after 200 ms without `ACK`. The model answers a repeated seq
+  without running the command again. The model sends one frame at a time, the next once the firmware confirmed the
+  previous one (or after 50 ms).
+- **Watchdog**: no frame from the PC for 1 s → the model switches all outputs off. `RelayConnection` sends `PING`
+  when idle.
+- **Don't poll the relay nonstop.** Polled as fast as possible (about 1000 online cycles/s over USB), the relay drops
+  its Bluetooth connection to the model every 5–75 s; with 5 ms or more between cycles, not once in 9 minutes
+  (measured). `RelayConnection::update()` runs the relay's online cycle at most every 10 ms
+  (`Options::relayPeriod`) and waits for the rest. The relay's inputs only change every 10 ms anyway.
+
+[`tx/relay_model.c`](tx/relay_model.c) is the model's side (the motor logic is the same as `Extension` in the online
+library). [`RelayConnection`](include/ftrobotx/relay/RelayConnection.hpp) is the PC's side, with the function names of
+`FtConnection`:
+
+```cpp
+FtConnection relay("/dev/ttyACM0");                                 // the relay's port
+RelayConnection model(relay, *parseBtAddress("00:13:7B:48:B2:E2"));  // the model's address
+model.connect();                                                  // Bluetooth connection + HELLO, a few seconds
+model.setInputMode(ExtensionIndex::Local, UniversalInput::I2, InputMode::Ultrasonic);
+model.subscribe(ExtensionIndex::Local, kRelayInputs | kRelayCounters);
+while (running)
+{
+    model.update();                                               // runs the relay's online cycle too
+    model.setMotorOutput(ExtensionIndex::Local, Motor::M1, 512);  // repeated calls are merged
+    auto cm = model.ultrasonicDistance(ExtensionIndex::Local, UniversalInput::I2);
+    bool button = relay.digitalValue(ExtensionIndex::Local, UniversalInput::I1); // the relay's own I/O
+}
+```
+
+Commands are queued and sent one after another. A setting (output, input mode, ...) replaces a queued one for the
+same target and is skipped when the model has it already. One-off commands (distance, sync, counter reset, text)
+are always sent. Measured: about 40 ms per command (relay on USB), no resends in normal use.
+
+Example: [`examples/relay_button_lamp.cpp`](examples/relay_button_lamp.cpp): the button on I1 of the relay switches
+the lamp on O1 of the model.
+
+```bash
+../../offline/tools/ftrobotx-load --port bt:00:13:7B:48:B2:E2 deploy tx/build/RelayModel.bin   # upload to the model
+```
+
+```bash
+./build/ftrobotx_relay_button_lamp -p /dev/ttyACM0 -a 00:13:7B:48:B2:E2   # -p: relay's port, -a: model's address
+```
+
+If the model runs `BtEcho` instead of `RelayModel`, or `-a` is the relay's own address, `connect()` says so.
+
+## The protocol of the Bluetooth commands
 
 Found by disassembling the static debug build of ftMscLib (`FtMscLib_Static_LIBCMTD_Debug.lib`, part of
 fischertechnik's *PC Programming ROBO TX Controller* package; its object files still carry the function names, e.g.
@@ -158,6 +267,9 @@ Firmware 1.30. TX-A (relay) on USB as sender, ROBO TX-618 as receiver, 2026-11-1
 | **TX-618 runs BtEcho**: burst, next message after the send confirmation | **220–240 messages/s** (about 3.7 KB/s), all arrive |
 | Loopback, one TX on USB | round trip 3.4 ms, 280–300 messages/s |
 | TX-618 driven by the PC in online mode over Bluetooth (`-r`) | round trip 210–450 ms, 2–7 messages/s: the PC polls TX-618 at ~12 cycles/s and its radio carries both links |
+
+Polling the relay nonstop also breaks the TX-to-TX connection now and then (see the relay protocol above); the
+ping and burst numbers come from short runs.
 
 Before the libraries waited for each Bluetooth command's reply, confirmations were lost (about 1 in 12–40) and
 online replies timed out; most of that came from sending too early (see above). Sustained bursts of several hundred

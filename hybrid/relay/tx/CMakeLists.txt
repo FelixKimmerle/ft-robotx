@@ -18,3 +18,8 @@ string(REPLACE ":" ",0x" relay_bytes "0x${FT_RELAY_ADDRESS}")
 
 ftrobotx_add_program(BtEcho bt_echo.c)
 target_compile_definitions(BtEcho PRIVATE RELAY_ADDRESS=${relay_bytes})
+
+# The model TX for the relay protocol (../protocol/relay_protocol.h).
+ftrobotx_add_program(RelayModel relay_model.c)
+target_compile_definitions(RelayModel PRIVATE RELAY_ADDRESS=${relay_bytes})
+target_include_directories(RelayModel PRIVATE ../protocol)
