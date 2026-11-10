@@ -32,10 +32,12 @@ checksum, the telecodes and the info structure. Thank you!
 
 The meaning of the individual fields (input modes, motor/output configuration, counter reset, distance and
 synchronization commands, version info) comes from fischertechnik's *PC Programming ROBO TX Controller*
-package (`ROBO_TX_FW.h` and its documentation). The offline mode builds on fischertechnik's *C compiler package*
+package (`ROBO_TX_FW.h` and its documentation). The offline mode builds on fischertechnik's
+[*C compiler package*](https://www.fischertechnik.de/-/media/fischertechnik/fite/service/downloads/robotics/tx-controller/documents/04-c-compiler-programmierpaket--fw1_30.ashx)
 (C_Compiler_RoboTXC V1.2, firmware 1.30); its two headers `ROBO_TX_FW.h` and `ROBO_TX_PRG.h` are included in
 [`offline/sdk/include`](offline/sdk/include), as their license note allows. Neither package's compiler or Windows
-tools are needed or included.
+tools are needed or included (see [Building on Windows](#building-on-windows) for why the package's compiler isn't
+used).
 
 Two things are not documented on the wire level: showing text on a controller's display (telecode 8) and asking
 the master which extensions are connected (telecode 7). Both were found by analyzing how fischertechnik's PC
@@ -53,6 +55,7 @@ library implements them (`SetRoboTxMessage`, `STATE_RD_REQUEST`), and confirmed 
   - [Using the library](#using-the-library)
 - [Offline mode: programs on the controller](#offline-mode-programs-on-the-controller)
   - [Graphics on the display](#graphics-on-the-display)
+- [Building on Windows](#building-on-windows)
 - [Troubleshooting](#troubleshooting)
 
 ## Access to the controller (Linux)
@@ -426,8 +429,14 @@ sudo pacman -S arm-none-eabi-gcc arm-none-eabi-binutils    # Arch
 sudo apt install gcc-arm-none-eabi binutils-arm-none-eabi  # Debian/Ubuntu
 ```
 
-On **Windows**, install the *Arm GNU Toolchain* for `arm-none-eabi` from Arm, CMake, Ninja and Python, and run
-`pip install pyserial` (needed for COM ports). The Windows path is written but not yet tested.
+On **Windows**, MSYS2 provides all of it (tested with `arm-none-eabi-gcc` 16.2); build from an MSYS2 *UCRT64* shell.
+Uploading needs Python with pyserial for COM ports (`pip install pyserial`, any Windows Python):
+
+```bash
+pacman -S mingw-w64-ucrt-x86_64-arm-none-eabi-gcc mingw-w64-ucrt-x86_64-arm-none-eabi-newlib mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
+```
+
+Arm's own *Arm GNU Toolchain* for `arm-none-eabi` with CMake and Ninja works the same way.
 
 This is a current GCC, not the YAGARTO GCC 4.4.1 from fischertechnik's package. Three things make sure the result
 fits the 2012 firmware:
@@ -636,6 +645,81 @@ int PrgTic(TA * p_ta_array, int ta_count)
   at every start, but initialized ones (`static int x = 5;`) keep their last value when the program is stopped
   and started again without being reloaded.
 
+## Building on Windows
+
+Two toolchains, one per side:
+
+| What | Runs on | Toolchain | Shell |
+| ---- | ------- | --------- | ----- |
+| PC programs: online library and examples, relay examples (`hybrid/relay`), XCP bridge (`xcp`) | the PC | MSVC (Visual Studio 2022 or newer, *Desktop development with C++*; it brings CMake and Ninja) | *x64 Native Tools Command Prompt* |
+| Programs for the TX: offline examples, `RelayModel`, `BtEcho` (`hybrid/relay/tx`) | the controller | `arm-none-eabi-gcc` from MSYS2 | MSYS2 *UCRT64* |
+
+Tested on Windows 11 with Visual Studio 2026 and MSYS2's `arm-none-eabi-gcc` 16.2 (2026-11-10).
+
+**Why not the compiler from fischertechnik's package?** The
+[C compiler package](https://www.fischertechnik.de/-/media/fischertechnik/fite/service/downloads/robotics/tx-controller/documents/04-c-compiler-programmierpaket--fw1_30.ashx)
+ships YAGARTO's `arm-elf-gcc` 4.4.1 (2009, the old `arm-elf` target, with make files and batch scripts). This project's
+SDK is written for a current `arm-none-eabi-gcc` and was never tried with it; the build checks the transfer-area
+layout and aligns the stack for current GCC (see [Toolchain](#toolchain)). From the package, only the two headers
+are used, and they're already in [`offline/sdk/include`](offline/sdk/include). Its docs
+([`docs/official/C_Compiler_RoboTXC_english_V1-2.pdf`](docs/official/C_Compiler_RoboTXC_english_V1-2.pdf)) still
+explain the transfer area and the firmware functions. The controller's firmware itself is not built: programs run on
+the stock firmware 1.30.
+
+### Once: install the tools
+
+1. **Visual Studio** with the workload *Desktop development with C++*.
+2. **MSYS2** (`winget install MSYS2.MSYS2`), then in the *MSYS2 UCRT64* shell:
+
+   ```bash
+   pacman -S mingw-w64-ucrt-x86_64-arm-none-eabi-gcc mingw-w64-ucrt-x86_64-arm-none-eabi-newlib mingw-w64-ucrt-x86_64-cmake mingw-w64-ucrt-x86_64-ninja
+   ```
+
+3. **Python 3** for uploading (`ftrobotx-load`), with pyserial for COM ports:
+
+   ```bash
+   python -m pip install --user pyserial
+   ```
+
+### PC programs (x64 Native Tools Command Prompt, from the repository root)
+
+```bat
+cmake -S hybrid/relay -B hybrid/relay/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build hybrid/relay/build
+cmake -S xcp -B xcp/build -G Ninja -DCMAKE_BUILD_TYPE=Release
+cmake --build xcp/build
+```
+
+The online library with its examples on its own: the same with `online/cpp` (the test tool also downloads SDL3 and
+Dear ImGui; not tried on Windows yet). A plain *cmd* or PowerShell works after
+`"C:\Program Files\Microsoft Visual Studio\18\Community\VC\Auxiliary\Build\vcvars64.bat"` (`2022` instead of `18`
+for Visual Studio 2022). A running program locks its `.exe`: stop it before rebuilding.
+
+### Programs for the TX (MSYS2 UCRT64 shell, from the repository root)
+
+```bash
+cmake -S hybrid/relay/tx -B hybrid/relay/tx/build -G Ninja -DFT_RELAY_ADDRESS=00:13:7B:53:DB:5E   # the relay's address
+cmake --build hybrid/relay/tx/build
+cmake -S offline -B offline/build -G Ninja
+cmake --build offline/build
+```
+
+The UCRT64 shell starts in your MSYS2 home; the repository is under `/c/Users/<you>/...`.
+
+### Uploading and running (any shell)
+
+The controller on USB is a `COMx` port (*USB Serial Device*, USB ID `221d:1000`, in the Device Manager under *Ports*):
+
+```bat
+python offline\tools\ftrobotx-load -p COM5 deploy --flash hybrid\relay\tx\build\RelayModel.bin
+hybrid\relay\build\ftrobotx_relay_button_lamp.exe -p COM5 -a 00:13:7B:48:B2:E2
+xcp\build\ftrobotx_xcp_bridge.exe -p COM5 -a 00:13:7B:48:B2:E2
+```
+
+With one USB cable, upload to the model TX first, then plug in the relay; the model keeps running on its own power.
+Bluetooth COM ports from Windows pairing (*Standard Serial over Bluetooth link*) didn't open in our test (timeout),
+so use USB from Windows for now; the TX-to-TX link of the relay doesn't involve Windows Bluetooth at all.
+
 ## Troubleshooting
 
 | Problem | Cause and fix |
@@ -651,5 +735,9 @@ int PrgTic(TA * p_ta_array, int ta_count)
 ## Status
 
 - Online and offline mode are tested on Linux with a master and one extension, via USB and Bluetooth.
-- The Windows code (C++ serial port, `ftrobotx-load` with COM ports) is written but not yet tested on Windows.
+- Windows 11 (2026-11-10): the C++ library, the relay examples and the XCP bridge build with MSVC (Visual Studio
+  2026) and work over USB (`COM5`): Bluetooth loopback 3.4 ms round trip and 282 messages/s as on Linux, relay
+  button/lamp 31–48 ms per command. The offline programs build with MSYS2's `arm-none-eabi-gcc` 16.2, and
+  `ftrobotx-load` uploads over a USB COM port. Not working yet: Bluetooth COM ports from Windows pairing (opening
+  them times out; probably the pairing, the TX expects PIN 1234). The test tool and the C# programs were not tried.
 - Not implemented: messages on the controller's display, the remote shell, and firmware updates.

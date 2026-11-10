@@ -20,6 +20,7 @@ struct Option
     const char* valueName; // e.g. "PORT", or nullptr for a flag without value
     const char* help;
     std::string* value; // receives the value, or "1" for a flag
+    std::vector<std::string>* values = nullptr; // instead of value: collects every occurrence (repeatable option)
 };
 
 inline constexpr const char* kPortHelp =
@@ -69,6 +70,10 @@ inline bool parse(int argc, char* argv[], std::string_view usage, std::string_vi
             if (option.valueName == nullptr)
             {
                 *option.value = "1";
+            }
+            else if (i + 1 < argc && option.values != nullptr)
+            {
+                option.values->emplace_back(argv[++i]);
             }
             else if (i + 1 < argc)
             {
