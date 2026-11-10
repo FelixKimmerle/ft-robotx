@@ -1,3 +1,4 @@
+using System.Buffers.Binary;
 using System.IO.Ports;
 using FtRoboTx.Extensions;
 using FtRoboTx.Packets;
@@ -22,6 +23,11 @@ public sealed class FtConnection : IDisposable
         Requested,
         Confirmed, // the firmware echoed the reset id; the counter value follows with the next exchange
     }
+
+    // Bluetooth reports read while waiting for other replies; the events get them in Update(). Only the master's
+    // radio is reachable this way.
+    private readonly List<BtEvent> btEvents = [];
+    private readonly List<BtScanResult> btScanResults = [];
 
     /// <summary>Longest wait for the firmware to take over the command ids of a new connection.</summary>
     private const int SettleTimeoutMs = 500;
@@ -249,12 +255,79 @@ public sealed class FtConnection : IDisposable
         Notify();
     }
 
+    // Bluetooth messages between ROBO TX Controllers (ftMscLib's Bluetooth Message API), see hybrid/relay/README.md.
+    // The commands only send the request; results and everything the controller reports by itself (received
+    // messages, incoming connections, scan results) come through the events, raised by Update(). Channels are 1 ... 8.
+    // Typical use: the receiver calls BtListen with the sender's address, the sender BtConnect; once connected (events
+    // ConnectionIndication / Success), the receiver calls BtStartReceive. BtConnect to the controller's own address
+    // gives a loopback connection, for testing with one controller.
+
+    /// <summary>Bluetooth channels are numbered 1 ... 8.</summary>
+    public const int BtChannels = 8;
+
+    /// <summary>The receiving controller keeps only the first 16 bytes of a message (measured).</summary>
+    public const int BtMaxMessage = 16;
+
+    /// <summary>Raised by <see cref="Update"/> for every Bluetooth event.</summary>
+    public event Action<BtEvent>? BtEventReceived;
+
+    /// <summary>Raised by <see cref="Update"/> for every scan status and found device.</summary>
+    public event Action<BtScanResult>? BtScanResultReceived;
+
+    /// <summary>Searches for Bluetooth devices; results come through <see cref="BtScanResultReceived"/>.</summary>
+    public void BtStartScan() => SendRequest(new BtPacket(BtPacket.Scan));
+    public void BtCancelScan() => SendRequest(new BtPacket(BtPacket.CancelScan));
+
+    public void BtConnect(int channel, BtAddress address) =>
+        SendRequest(new BtPacket(BtPacket.Connect, CheckChannel(channel), address));
+    public void BtDisconnect(int channel) => SendRequest(new BtPacket(BtPacket.Disconnect, CheckChannel(channel)));
+
+    /// <summary>Accepts a connection from <paramref name="remote"/> on the channel.</summary>
+    public void BtListen(int channel, BtAddress remote) =>
+        SendRequest(new BtPacket(BtPacket.Listen, CheckChannel(channel), remote));
+    public void BtStopListen(int channel) => SendRequest(new BtPacket(BtPacket.StopListen, CheckChannel(channel)));
+
+    /// <summary>Reports received messages through <see cref="BtEventReceived"/>. Only works on a connected channel.</summary>
+    public void BtStartReceive(int channel) => SendRequest(new BtPacket(BtPacket.StartReceive, CheckChannel(channel)));
+    public void BtStopReceive(int channel) => SendRequest(new BtPacket(BtPacket.StopReceive, CheckChannel(channel)));
+
+    /// <summary>
+    /// Sends up to <see cref="BtMaxMessage"/> (16) bytes; the receiving controller drops anything beyond that. The send
+    /// event (status Success) confirms it.
+    /// </summary>
+    public void BtSend(int channel, ReadOnlySpan<byte> message)
+    {
+        if (message.Length > BtMaxMessage)
+        {
+            throw new ArgumentException(
+                $"Bluetooth message of {message.Length} bytes; the receiving controller keeps only {BtMaxMessage}",
+                nameof(message));
+        }
+        SendRequest(new BtPacket(CheckChannel(channel), message));
+    }
+
+    public void BtSend(int channel, string message) => BtSend(channel, System.Text.Encoding.ASCII.GetBytes(message));
+
     public void Dispose() => serialPort.Dispose();
 
     private void Exchange() => SendPacket(new OutputPacket(extensions), new InputResponse(extensions));
 
     private void Notify()
     {
+        // Taken out first: a handler may send further commands, whose replies are queued anew.
+        BtScanResult[] scanResults = [.. btScanResults];
+        btScanResults.Clear();
+        foreach (BtScanResult result in scanResults)
+        {
+            BtScanResultReceived?.Invoke(result);
+        }
+        BtEvent[] events = [.. btEvents];
+        btEvents.Clear();
+        foreach (BtEvent btEvent in events)
+        {
+            BtEventReceived?.Invoke(btEvent);
+        }
+
         for (int e = 0; e < extensions.Count; e++)
         {
             // Cleared before the call, so the handler can start the next command.
@@ -316,6 +389,19 @@ public sealed class FtConnection : IDisposable
         }
     }
 
+    /// <summary>Sends a packet without waiting for a reply (Bluetooth commands; their replies come as events).</summary>
+    private void SendRequest(Packet packet)
+    {
+        packet.SessionId = sessionId;
+        packet.TransactionId = 0; // like ftMscLib for Bluetooth commands; the reply doesn't advance the ids
+        byte[] data = packet.GetBytes();
+        if (trace)
+        {
+            Console.Error.WriteLine($"> {Convert.ToHexString(data)}");
+        }
+        serialPort.Write(data, 0, data.Length);
+    }
+
     private void SendPacket(Packet packet, Response response)
     {
         packet.SessionId = sessionId;
@@ -325,30 +411,95 @@ public sealed class FtConnection : IDisposable
         {
             Console.Error.WriteLine($"> {Convert.ToHexString(data)}");
         }
-
         serialPort.Write(data, 0, data.Length);
 
-        byte[] receivedData = new byte[response.Length];
-        int received = 0;
-        try
+        // Bluetooth replies and reports may come first; they are queued for the events.
+        byte[] receivedData;
+        while (true)
         {
-            while (received < receivedData.Length)
+            receivedData = ReadPacket(response.Length);
+            if (!BtPacket.IsReply(BinaryPrimitives.ReadInt32LittleEndian(receivedData.AsSpan(16))))
             {
-                received += serialPort.Read(receivedData, received, receivedData.Length - received);
+                break;
             }
+            QueueBtReply(receivedData);
         }
-        catch (TimeoutException)
+        if (receivedData.Length != response.Length)
         {
-            throw new TimeoutException(
-                $"No response from controller (got {received} of {receivedData.Length} bytes: {Convert.ToHexString(receivedData, 0, received)})");
-        }
-        if (trace)
-        {
-            Console.Error.WriteLine($"< {Convert.ToHexString(receivedData)}");
+            throw new InvalidOperationException(
+                $"Unexpected response of {receivedData.Length} bytes (expected {response.Length}): {Convert.ToHexString(receivedData)}");
         }
 
         response.Load(receivedData);
         sessionId = response.SessionId;
         transactionId = (ushort)(response.TransactionId + 1);
     }
+
+    /// <summary>Reads the next packet from the controller, skipping bytes until the 02 55 start.</summary>
+    private byte[] ReadPacket(int expectedLength)
+    {
+        byte[] start = new byte[4]; // 02 55 and the length (big endian) of what follows up to the checksum
+        int received = ReadFully(start, 0, 4, expectedLength);
+        while (start[0] != 0x02 || start[1] != 0x55)
+        {
+            if (trace)
+            {
+                Console.Error.WriteLine($"skipping {start[0]:X2}");
+            }
+            Array.Copy(start, 1, start, 0, 3);
+            received = 3 + ReadFully(start, 3, 1, expectedLength);
+        }
+
+        int length = (start[2] << 8) | start[3];
+        if (length < 20)
+        {
+            throw new InvalidOperationException($"Invalid packet length {length}: {Convert.ToHexString(start)}");
+        }
+        byte[] packet = new byte[4 + length + 3]; // + checksum and end byte
+        start.CopyTo(packet, 0);
+        ReadFully(packet, 4, packet.Length - 4, expectedLength);
+        if (trace)
+        {
+            Console.Error.WriteLine($"< {Convert.ToHexString(packet)}");
+        }
+        return packet;
+    }
+
+    private int ReadFully(byte[] buffer, int offset, int count, int expectedLength)
+    {
+        int received = 0;
+        try
+        {
+            while (received < count)
+            {
+                received += serialPort.Read(buffer, offset + received, count - received);
+            }
+        }
+        catch (TimeoutException)
+        {
+            throw new TimeoutException(
+                $"No response from controller (got {offset + received} of {expectedLength} bytes: {Convert.ToHexString(buffer, 0, offset + received)})");
+        }
+        return received;
+    }
+
+    private void QueueBtReply(byte[] bytes)
+    {
+        BtReply reply = new();
+        reply.Load(bytes);
+        if (reply.IsScan)
+        {
+            btScanResults.Add(reply.ScanResult!);
+        }
+        else
+        {
+            btEvents.Add(reply.Event!);
+        }
+    }
+
+    private static int CheckChannel(int channel) =>
+        channel is >= 1 and <= BtChannels
+            ? channel
+            : throw new ArgumentOutOfRangeException(nameof(channel), channel, "Bluetooth channel must be 1 ... 8");
+
 }

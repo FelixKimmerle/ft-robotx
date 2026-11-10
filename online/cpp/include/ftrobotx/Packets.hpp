@@ -8,6 +8,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ftrobotx/Bluetooth.hpp"
 #include "ftrobotx/Extension.hpp"
 
 namespace ftrobotx
@@ -86,6 +87,11 @@ class Packet
   public:
     virtual ~Packet() = default;
 
+    [[nodiscard]] std::int32_t commandCode() const
+    {
+        return header_.commandCode;
+    }
+
     void setSessionId(std::uint16_t id)
     {
         header_.sessionId = id;
@@ -129,6 +135,10 @@ class Response
     [[nodiscard]] std::uint16_t transactionId() const
     {
         return header_.transactionId;
+    }
+    [[nodiscard]] std::int32_t commandCode() const
+    {
+        return header_.commandCode;
     }
 
   protected:
@@ -313,6 +323,70 @@ class InputResponse : public Response
 
   private:
     std::vector<Extension>& extensions_;
+};
+
+/// Bluetooth message commands (telecodes 10 ... 18, found in ftMscLib). The controller answers with telecode + 100,
+/// some right away, some seconds later (connect), and also sends such packets by itself (received messages, incoming
+/// connections, scan results); FtConnection treats all of them as events.
+class BtPacket : public Packet
+{
+  public:
+    static constexpr std::int32_t kScan = 10;
+    static constexpr std::int32_t kCancelScan = 11;
+    static constexpr std::int32_t kConnect = 12;
+    static constexpr std::int32_t kDisconnect = 13;
+    static constexpr std::int32_t kSend = 14;
+    static constexpr std::int32_t kStartReceive = 15;
+    static constexpr std::int32_t kStopReceive = 16;
+    static constexpr std::int32_t kListen = 17;
+    static constexpr std::int32_t kStopListen = 18;
+
+    /// Whether a reply telecode belongs to a Bluetooth command.
+    [[nodiscard]] static bool isReply(std::int32_t commandCode)
+    {
+        return commandCode >= kScan + 100 && commandCode <= kStopListen + 100;
+    }
+
+    /// Scan or cancel scan: no payload.
+    explicit BtPacket(std::int32_t commandCode);
+    /// Disconnect, start/stop receive, stop listen: channel, 0, 0, 0.
+    BtPacket(std::int32_t commandCode, int channel);
+    /// Connect, listen: channel, address, 0.
+    BtPacket(std::int32_t commandCode, int channel, const BtAddress& address);
+    /// Send: channel, 0, length (16 bit), message, 2 bytes padding (as ftMscLib does).
+    BtPacket(int channel, std::span<const std::uint8_t> message);
+
+  protected:
+    void writePayload(ByteWriter& writer) const override;
+
+  private:
+    std::vector<std::uint8_t> payload_;
+};
+
+/// Any packet with a Bluetooth reply telecode (110 ... 118).
+class BtReply : public Response
+{
+  public:
+    /// Scan replies (110, 111) carry a scan status, the others a channel event.
+    [[nodiscard]] bool isScan() const
+    {
+        return header_.commandCode == BtPacket::kScan + 100 || header_.commandCode == BtPacket::kCancelScan + 100;
+    }
+    [[nodiscard]] const BtEvent& event() const
+    {
+        return event_;
+    }
+    [[nodiscard]] const BtScanResult& scanResult() const
+    {
+        return scanResult_;
+    }
+
+  protected:
+    void loadPayload(std::span<const std::uint8_t> payload) override;
+
+  private:
+    BtEvent event_;
+    BtScanResult scanResult_;
 };
 
 } // namespace ftrobotx

@@ -10,6 +10,7 @@
 #include <string_view>
 #include <vector>
 
+#include "ftrobotx/Bluetooth.hpp"
 #include "ftrobotx/Extension.hpp"
 #include "ftrobotx/Sensors.hpp"
 #include "ftrobotx/SerialPort.hpp"
@@ -118,13 +119,58 @@ class FtConnection
     [[nodiscard]] std::optional<std::uint16_t> ultrasonicDistance(ExtensionIndex index, UniversalInput input);
 
     /// Sends the configuration if it changed, then the current output values, and reads back the inputs of all
-    /// extensions.
+    /// extensions. Callbacks (motor, counter reset, Bluetooth) are called from here.
     void update();
+
+    // Bluetooth messages between ROBO TX Controllers (ftMscLib's Bluetooth Message API), see hybrid/relay/README.md.
+    // The commands only send the request; results and everything the controller reports by itself (received
+    // messages, incoming connections, scan results) come through the callbacks, called from update(). Channels are
+    // 1 ... 8. Typical use: the receiver calls btListen() with the sender's address, the sender btConnect(); once
+    // connected (events ConnectionIndication / Success), the receiver calls btStartReceive(). btConnect() to the
+    // controller's own address gives a loopback connection, for testing with one controller.
+
+    /// Searches for Bluetooth devices; results come through the scan callback (the controller itself first).
+    void btStartScan();
+    void btCancelScan();
+
+    void btConnect(int channel, const BtAddress& address);
+    void btDisconnect(int channel);
+
+    /// Accepts a connection from `remote` on the channel.
+    void btListen(int channel, const BtAddress& remote);
+    void btStopListen(int channel);
+
+    /// Reports received messages through the Bluetooth callback. Only works on a connected channel.
+    void btStartReceive(int channel);
+    void btStopReceive(int channel);
+
+    /// Sends up to kBtMaxMessage (16) bytes; the receiving controller drops anything beyond that. The send callback
+    /// event (status Success) confirms it.
+    void btSend(int channel, std::span<const std::uint8_t> message);
+    void btSend(int channel, std::string_view message);
+
+    /// Called from update() for every Bluetooth event.
+    void setBtCallback(std::function<void(const BtEvent&)> callback)
+    {
+        btCallback_ = std::move(callback);
+    }
+
+    /// Called from update() for every scan status and found device.
+    void setBtScanCallback(std::function<void(const BtScanResult&)> callback)
+    {
+        btScanCallback_ = std::move(callback);
+    }
 
   private:
     void sendConfig();
     void exchange();
     void notify();
+    /// Sends a packet without waiting for a reply (Bluetooth commands; their replies come as events).
+    void sendRequest(Packet& packet);
+    /// Reads the next packet from the controller, skipping bytes until the 02 55 start.
+    [[nodiscard]] std::vector<std::uint8_t> readPacket(std::size_t expectedLength);
+    /// Queues a Bluetooth reply/report for the callbacks.
+    void queueBtReply(std::span<const std::uint8_t> bytes);
     /// Runs a motor command on the extension and forgets the pending reports of the motors it gave a new command.
     template <typename Command> void motorCommand(ExtensionIndex index, Command command);
     void sendPacket(Packet& packet, Response& response);
@@ -145,6 +191,12 @@ class FtConnection
     std::vector<std::array<ResetState, kMotors>> counterResets_;
     std::function<void(ExtensionIndex, Motor)> motorReachedCallback_;
     std::function<void(ExtensionIndex, Counter)> counterResetCallback_;
+    // Bluetooth reports read while waiting for other replies; the callbacks get them in update(). Only the master's
+    // radio is reachable this way.
+    std::vector<BtEvent> btEvents_;
+    std::vector<BtScanResult> btScanResults_;
+    std::function<void(const BtEvent&)> btCallback_;
+    std::function<void(const BtScanResult&)> btScanCallback_;
     bool trace_ = false;
 };
 

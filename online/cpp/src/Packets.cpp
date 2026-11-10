@@ -343,4 +343,69 @@ void InputResponse::loadPayload(std::span<const std::uint8_t> payload)
     }
 }
 
+BtPacket::BtPacket(std::int32_t commandCode)
+{
+    header_.commandCode = commandCode;
+    header_.numPayload = 1;
+}
+
+BtPacket::BtPacket(std::int32_t commandCode, int channel) : BtPacket(commandCode)
+{
+    payload_ = {static_cast<std::uint8_t>(channel), 0, 0, 0};
+}
+
+BtPacket::BtPacket(std::int32_t commandCode, int channel, const BtAddress& address) : BtPacket(commandCode)
+{
+    payload_.push_back(static_cast<std::uint8_t>(channel));
+    payload_.insert(payload_.end(), address.begin(), address.end());
+    payload_.push_back(0);
+}
+
+BtPacket::BtPacket(int channel, std::span<const std::uint8_t> message) : BtPacket(kSend)
+{
+    ByteWriter writer;
+    writer.u8(static_cast<std::uint8_t>(channel));
+    writer.u8(0);
+    writer.le(static_cast<std::uint16_t>(message.size()));
+    writer.append(message);
+    writer.le(std::uint16_t{0});
+    payload_ = writer.take();
+}
+
+void BtPacket::writePayload(ByteWriter& writer) const
+{
+    writer.append(payload_);
+}
+
+void BtReply::loadPayload(std::span<const std::uint8_t> payload)
+{
+    if (isScan())
+    {
+        // BT_SCAN_STATUS: status, address, 2 bytes padding, name
+        scanResult_.status = static_cast<BtScanStatus>(readLE<std::uint16_t>(payload, 0));
+        if (payload.size() >= 10)
+        {
+            std::copy_n(payload.begin() + 2, scanResult_.address.size(), scanResult_.address.begin());
+            std::span<const std::uint8_t> name = payload.subspan(10);
+            auto end = std::find(name.begin(), name.end(), std::uint8_t{0});
+            scanResult_.name = readString(name.subspan(0, static_cast<std::size_t>(end - name.begin())));
+        }
+        return;
+    }
+
+    // BT_CB: channel, status; for received messages BT_RECV_CB: channel, status, length, message (16 bytes)
+    event_.command = static_cast<BtCommand>(header_.commandCode - 100 - BtPacket::kConnect);
+    event_.channel = readLE<std::uint16_t>(payload, 0);
+    event_.status = static_cast<BtStatus>(readLE<std::uint16_t>(payload, 2));
+    if (event_.status == BtStatus::MessageIndication)
+    {
+        std::size_t length = std::min<std::size_t>(readLE<std::uint16_t>(payload, 4), kBtMaxMessage);
+        if (payload.size() < 6 + length)
+        {
+            throw ProtocolError("Bluetooth message reply too short");
+        }
+        event_.message.assign(payload.begin() + 6, payload.begin() + 6 + static_cast<std::ptrdiff_t>(length));
+    }
+}
+
 } // namespace ftrobotx

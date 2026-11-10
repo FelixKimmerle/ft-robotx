@@ -21,6 +21,7 @@ function(ftrobotx_set_warnings target)
 endfunction()
 
 add_library(ftrobotx
+    src/Bluetooth.cpp
     src/Extension.cpp
     src/FtConnection.cpp
     src/Packets.cpp
