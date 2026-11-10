@@ -106,6 +106,8 @@ void RelayConnection::connect(std::chrono::milliseconds timeout)
     inEffect_.clear();
     helloReply_.reset();
     echoed_ = false;
+    lastValuesSeq_.reset(); // a restarted model counts from 0 again
+    hasValues_.fill(false);
     queueCommand({RELAY_HELLO, RELAY_PROTOCOL_VERSION});
     if (!waitFor([&] {
             sendNext();

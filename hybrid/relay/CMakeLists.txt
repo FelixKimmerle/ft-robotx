@@ -6,8 +6,11 @@ project(FtRoboTxRelay
 
 option(FT_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
-# The online library; as a subproject it builds without its examples, tests and GUI.
-add_subdirectory(../../online/cpp ftrobotx)
+# The online library; as a subproject it builds without its examples, tests and GUI. A project that includes this
+# one (xcp/) may have added it already.
+if(NOT TARGET ftrobotx)
+    add_subdirectory(../../online/cpp ftrobotx)
+endif()
 
 # PC side of the relay protocol: RelayConnection talks to a model TX running tx/relay_model.c.
 add_library(ftrobotx_relay src/RelayConnection.cpp)
@@ -15,6 +18,12 @@ add_library(ftrobotx::relay ALIAS ftrobotx_relay)
 target_include_directories(ftrobotx_relay PUBLIC include protocol)
 target_link_libraries(ftrobotx_relay PUBLIC ftrobotx::ftrobotx)
 ftrobotx_set_warnings(ftrobotx_relay)
+
+# Examples only when built on their own, not as part of xcp/.
+option(FT_RELAY_BUILD_EXAMPLES "Build the relay examples" ${PROJECT_IS_TOP_LEVEL})
+if(NOT FT_RELAY_BUILD_EXAMPLES)
+    return()
+endif()
 
 add_executable(ftrobotx_bt_ping examples/bt_ping.cpp)
 target_include_directories(ftrobotx_bt_ping PRIVATE ../../online/cpp/examples) # Cli.hpp

@@ -5,4 +5,5 @@ obj/
 online/cpp/build*/
 offline/build*/
 hybrid/**/build*/
+xcp/build*/
 __pycache__/
