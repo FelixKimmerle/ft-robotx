@@ -1,11 +1,14 @@
 // Checks the C++ protocol code against byte vectors recorded from the C# implementation.
+#include <cmath>
 #include <cstdio>
 #include <iostream>
+#include <optional>
 #include <sstream>
 #include <string>
 #include <vector>
 
 #include "ftrobotx/Packets.hpp"
+#include "ftrobotx/Sensors.hpp"
 
 using namespace ftrobotx;
 
@@ -181,6 +184,23 @@ int main()
         r.load(bytes);
         const auto& online = r.extensionsOnline();
         check(r.success() && online[0] && online[1] && !online[2] && !online[7], "StateResponse extensions online");
+    }
+
+    // Sensor conversions, with the readings from the test hardware (desk about 22 °C, held in the hand about 35 °C)
+    {
+        auto near = [](std::optional<double> value, double expected) {
+            return value && std::abs(*value - expected) < 0.05;
+        };
+        check(near(ntcCelsius(1500), 25.0), "NTC at R25");
+        check(near(ntcCelsius(1709), 22.1), "NTC 1709 Ohm");
+        check(near(ntcCelsius(979), 35.1), "NTC 979 Ohm");
+        check(near(ntcKelvin(1500), 298.15), "NTC Kelvin");
+        check(near(ntcCelsius(2000, 2000.0, 3500.0), 25.0), "NTC with own R25");
+        check(!ntcCelsius(0) && !ntcCelsius(kResistanceOverload), "NTC without value");
+        check(ultrasonicCm(177) == 177 && ultrasonicCm(kUltrasonicMin) && ultrasonicCm(kUltrasonicMax),
+              "Ultrasonic in range");
+        check(!ultrasonicCm(0) && !ultrasonicCm(kUltrasonicOverload) && !ultrasonicCm(kUltrasonicNotPresent),
+              "Ultrasonic without value");
     }
 
     if (failures == 0)

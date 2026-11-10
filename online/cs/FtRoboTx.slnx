@@ -2,6 +2,9 @@
   <Folder Name="/examples/">
     <Project Path="examples/ButtonLamp/ButtonLamp.csproj" />
     <Project Path="examples/ExtensionTest/ExtensionTest.csproj" />
+    <Project Path="examples/MotorMeasure/MotorMeasure.csproj" />
+    <Project Path="examples/MotorSync/MotorSync.csproj" />
+    <Project Path="examples/Sensors/Sensors.csproj" />
   </Folder>
   <Project Path="FtRoboTx.csproj" />
 </Solution>

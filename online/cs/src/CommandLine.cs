@@ -52,8 +52,10 @@ public static class CommandLine
         }
         foreach (string tty in Directory.GetDirectories("/sys/class/tty", "ttyACM*").Order())
         {
-            // From the tty's USB interface up to the USB device, which has the IDs.
-            DirectoryInfo? device = new DirectoryInfo(Path.Combine(tty, "device")).ResolveLinkTarget(true) as DirectoryInfo;
+            // From the tty's USB interface up to the USB device, which has the IDs. The tty itself is a link too,
+            // and "device" is relative to where it points.
+            string ttyPath = new DirectoryInfo(tty).ResolveLinkTarget(true)?.FullName ?? tty;
+            DirectoryInfo? device = new DirectoryInfo(Path.Combine(ttyPath, "device")).ResolveLinkTarget(true) as DirectoryInfo;
             for (int up = 0; device is not null && up < 3; up++, device = device.Parent)
             {
                 string vendor = Path.Combine(device.FullName, "idVendor");

@@ -9,14 +9,16 @@ public class Output
     public ushort[] MotorCommandId { get; } = new ushort[Extension.Motors];
 
     /// <summary>
-    /// Stops a motor like ftMscLib's StopMotorExCmd: duty and distance to 0, and a new motor command, so a running
-    /// distance/synchronization command is cancelled too.
+    /// Stops a motor like ftMscLib's StopMotorExCmd: duty, distance and synchronization to 0, and a new motor
+    /// command, so a running distance/synchronization command is cancelled too. A motor synchronized with this one
+    /// is held by the firmware then; <see cref="FtConnection.StopMotor"/> stops both.
     /// </summary>
     public void StopMotor(int motor)
     {
         PwmOutputValues[2 * motor] = 0;
         PwmOutputValues[2 * motor + 1] = 0;
         MotorDistanceValues[motor] = 0;
+        MotorMasterValues[motor] = 0;
         MotorCommandId[motor]++;
     }
 

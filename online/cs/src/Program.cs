@@ -33,8 +33,8 @@ foreach (Extension extension in ft.Extensions)
     Console.WriteLine(extension.MacAddress);
 }
 
-//ft.SetMotorSync(ExtensionIndex.Slave1, Motor.M1, Motor.M3, 512);
-//ft.SetMotorDistance(ExtensionIndex.Slave1, Motor.M1, -512, 200);
+//ft.StartMotorSync(ExtensionIndex.Slave1, Motor.M3, Motor.M1, 512);
+//ft.StartMotorDistance(ExtensionIndex.Slave1, Motor.M1, -512, 200);
 
 ft.Extensions[(int)ExtensionIndex.Slave1].Output.MotorMasterValues[(int)Motor.M1] = (byte)(Motor.M3 + 1);
 ft.SetMotorOutput(ExtensionIndex.Slave1, Motor.M3, 512);
@@ -56,7 +56,7 @@ try
 
         if (ft.GetDigitalValue(ExtensionIndex.Local, UniversalInput.I8))
         {
-            ft.SetMotorDistance(ExtensionIndex.Slave1, Motor.M1, -512, 200);
+            ft.StartMotorDistance(ExtensionIndex.Slave1, Motor.M1, -512, 200);
         }
     }
 }

@@ -12,11 +12,26 @@ public sealed class FtConnection : IDisposable
     private ushort sessionId;
     private ushort transactionId;
     private readonly byte[] messageIds; // last message id per controller
+    // commands whose completion the events still have to report, per controller and motor/counter
+    private readonly bool[,] motorPending;
+    private readonly ResetState[,] counterResets;
+
+    private enum ResetState : byte
+    {
+        Done,
+        Requested,
+        Confirmed, // the firmware echoed the reset id; the counter value follows with the next exchange
+    }
+
+    /// <summary>Longest wait for the firmware to take over the command ids of a new connection.</summary>
+    private const int SettleTimeoutMs = 500;
 
     /// <summary>Set the environment variable FT_TRACE=1 to log every packet to stderr.</summary>
     private readonly bool trace = Environment.GetEnvironmentVariable("FT_TRACE") is { Length: > 0 } and not "0";
 
     public IReadOnlyList<Extension> Extensions => extensions;
+
+    public Extension GetExtension(ExtensionIndex index) => Get(index);
 
     public FtConnection(string portName, int numExtensions = 1, int timeoutMs = 1000)
     {
@@ -54,6 +69,20 @@ public sealed class FtConnection : IDisposable
             SendConfig();
 
             SendPacket(new RequestInfoPacket(extensions), new RequestInfoResponse(extensions));
+
+            // The firmware confirms motor commands and counter resets by echoing their ids. Until it has seen our ids
+            // (starting at 0), it still echoes those of an earlier connection, which could pass for a confirmation of
+            // our first command. It takes a few milliseconds; this also stops motors still running from an earlier
+            // connection.
+            motorPending = new bool[numExtensions, Extension.Motors];
+            counterResets = new ResetState[numExtensions, Extension.Motors];
+            long settleEnd = Environment.TickCount64 + SettleTimeoutMs;
+            do
+            {
+                Exchange();
+            } while (!extensions.All(extension => Enumerable.Range(0, Extension.Motors).All(i =>
+                         extension.IsMotorCommandDone(i) && ResetConfirmed(extension, i))) &&
+                     Environment.TickCount64 < settleEnd);
         }
         catch
         {
@@ -67,28 +96,58 @@ public sealed class FtConnection : IDisposable
         Get(index).Output.PwmOutputValues[(int)pwm] = duty;
     }
 
-    public void SetMotorOutput(ExtensionIndex index, Motor motor, short duty)
+    /// <summary>
+    /// Runs a motor endlessly at the given duty (-512 ... 512, the sign gives the direction). Ends a distance or
+    /// synchronization command of the motor; a motor it was synchronized with is stopped.
+    /// </summary>
+    public void SetMotorOutput(ExtensionIndex index, Motor motor, short duty) =>
+        MotorCommand(index, extension => extension.SetMotorOutput((int)motor, duty));
+
+    /// <summary>
+    /// Runs a motor with encoder for <paramref name="distance"/> counter pulses, then the firmware brakes it
+    /// (ftMscLib's StartMotorExCmd without slave). Resets the motor's counter. <see cref="IsMotorCommandDone"/> and
+    /// <see cref="MotorReached"/> tell when it is there.
+    /// </summary>
+    public void StartMotorDistance(ExtensionIndex index, Motor motor, short duty, ushort distance)
     {
-        short[] pwm = Get(index).Output.PwmOutputValues;
-        pwm[2 * (int)motor] = duty > 0 ? duty : (short)0;
-        pwm[2 * (int)motor + 1] = duty > 0 ? (short)0 : (short)-duty;
+        MotorCommand(index, extension => extension.StartMotorDistance((int)motor, duty, distance));
+        motorPending[(int)index, (int)motor] = distance != 0;
     }
 
-    public void SetMotorDistance(ExtensionIndex index, Motor motor, short duty, ushort distance)
+    /// <summary>
+    /// Runs two motors with encoders synchronized (ftMscLib's StartMotorExCmd): the firmware keeps their counters
+    /// equal by slowing down the faster one, in either direction. With a distance, both stop after
+    /// <paramref name="distance"/> pulses; with 0 they run until stopped. Resets both counters. Each motor's counter
+    /// must be on the counter input with the same number (M1 on C1, ...).
+    /// </summary>
+    public void StartMotorSync(ExtensionIndex index, Motor master, Motor slave, short duty, ushort distance = 0,
+                               SyncDirection direction = SyncDirection.Same)
     {
-        SetMotorOutput(index, motor, duty);
-        Output output = Get(index).Output;
-        output.MotorDistanceValues[(int)motor] = distance;
-        output.MotorCommandId[(int)motor]++;
+        MotorCommand(index, extension => extension.StartMotorSync((int)master, (int)slave, duty, distance, direction));
+        motorPending[(int)index, (int)master] = motorPending[(int)index, (int)slave] = distance != 0;
     }
 
-    public void SetMotorSync(ExtensionIndex index, Motor motor, Motor other, short duty, ushort distance = 0)
-    {
-        SetMotorOutput(index, motor, duty);
-        SetMotorOutput(index, other, duty);
+    /// <summary>
+    /// Stops a motor (ftMscLib's StopMotorExCmd) and a motor synchronized with it. Cancelling a running distance or
+    /// synchronization command resets the counters (it is a new motor command); otherwise they keep their values.
+    /// </summary>
+    public void StopMotor(ExtensionIndex index, Motor motor) =>
+        MotorCommand(index, extension => extension.StopMotor((int)motor));
 
-        Get(index).Output.MotorMasterValues[(int)motor] = (byte)(other + 1);
-    }
+    /// <summary>
+    /// True once the motor finished its last distance command (<see cref="StartMotorDistance"/>,
+    /// <see cref="StartMotorSync"/> with a distance); also true for a motor without one. Updated by <see cref="Update"/>.
+    /// </summary>
+    public bool IsMotorCommandDone(ExtensionIndex index, Motor motor) => Get(index).IsMotorCommandDone((int)motor);
+
+    /// <summary>
+    /// Raised by <see cref="Update"/> when a motor finished a distance command (ftMscLib's SetCBMotorExReached); for
+    /// a synchronized pair, once per motor. The handler may start the next command.
+    /// </summary>
+    public event Action<ExtensionIndex, Motor>? MotorReached;
+
+    /// <summary>Raised by <see cref="Update"/> when a counter reset was carried out (ftMscLib's SetCBCounterResetted).</summary>
+    public event Action<ExtensionIndex, Counter>? CounterReset;
 
     /// <summary>
     /// Shows a text (up to 98 ASCII characters) on the controller's display right away; an empty text clears it.
@@ -124,11 +183,22 @@ public sealed class FtConnection : IDisposable
     public void ResetCounter(ExtensionIndex index, Counter counter)
     {
         Get(index).Output.CounterResetCommandId[(int)counter]++;
+        counterResets[(int)index, (int)counter] = ResetState.Requested;
     }
 
+    /// <summary>True once the last counter reset was carried out and <see cref="GetCounterValue"/> shows it.</summary>
+    public bool IsCounterResetDone(ExtensionIndex index, Counter counter) =>
+        counterResets[(int)index, (int)counter] == ResetState.Done;
+
     /// <summary>
-    /// Stops all motors and outputs of all extensions, including running distance commands. Takes effect with the
-    /// next <see cref="Update"/>.
+    /// Pulses counted since the last reset or motor command, in either direction. The encoder motors give 3 pulses
+    /// per turn of the motor, 63 1/3 per turn of the output shaft.
+    /// </summary>
+    public ushort GetCounterValue(ExtensionIndex index, Counter counter) => Get(index).Input.GetCounterValue((int)counter);
+
+    /// <summary>
+    /// Stops all motors and outputs of all extensions, including running distance and synchronization commands.
+    /// Takes effect with the next <see cref="Update"/>.
     /// </summary>
     public void StopAllOutputs()
     {
@@ -136,7 +206,30 @@ public sealed class FtConnection : IDisposable
         {
             extension.Output.StopAll();
         }
+        Array.Clear(motorPending);
     }
+
+    /// <summary>
+    /// Configures a universal input (ftMscLib's SetFtUniConfig); sent with the next <see cref="Update"/>. The value
+    /// reads 0 until the first measurement in the new mode (a few hundred milliseconds for the ultrasonic sensor and
+    /// the NTC).
+    /// </summary>
+    public void SetInputMode(ExtensionIndex index, UniversalInput input, InputMode mode, bool digital = false) =>
+        Get(index).Config.SetUniversalInputConfig((int)input, new UniversalInputConfig(mode, digital));
+
+    /// <summary>
+    /// Temperature in °C of an NTC on an input in analog resistance mode; see <see cref="Sensors.NtcCelsius"/>. Null
+    /// before the first measurement or without sensor.
+    /// </summary>
+    public double? GetNtcTemperature(ExtensionIndex index, UniversalInput input, double r25 = Sensors.NtcR25,
+                                     double b = Sensors.NtcB) =>
+        Sensors.NtcCelsius(GetAnalogValue(index, input), r25, b);
+
+    /// <summary>
+    /// Distance in cm from an ultrasonic sensor on an input in ultrasonic mode; see <see cref="Sensors.UltrasonicCm"/>.
+    /// </summary>
+    public ushort? GetUltrasonicDistance(ExtensionIndex index, UniversalInput input) =>
+        Sensors.UltrasonicCm(GetAnalogValue(index, input));
 
     public bool GetDigitalValue(ExtensionIndex index, UniversalInput input) => GetAnalogValue(index, input) != 0;
 
@@ -152,10 +245,59 @@ public sealed class FtConnection : IDisposable
             SendConfig();
         }
 
-        SendPacket(new OutputPacket(extensions), new InputResponse(extensions));
+        Exchange();
+        Notify();
     }
 
     public void Dispose() => serialPort.Dispose();
+
+    private void Exchange() => SendPacket(new OutputPacket(extensions), new InputResponse(extensions));
+
+    private void Notify()
+    {
+        for (int e = 0; e < extensions.Count; e++)
+        {
+            // Cleared before the call, so the handler can start the next command.
+            for (int m = 0; m < Extension.Motors; m++)
+            {
+                if (motorPending[e, m] && extensions[e].IsMotorCommandDone(m))
+                {
+                    motorPending[e, m] = false;
+                    MotorReached?.Invoke((ExtensionIndex)e, (Motor)m);
+                }
+            }
+            for (int c = 0; c < Extension.Motors; c++)
+            {
+                if (counterResets[e, c] == ResetState.Confirmed)
+                {
+                    counterResets[e, c] = ResetState.Done;
+                    CounterReset?.Invoke((ExtensionIndex)e, (Counter)c);
+                }
+                else if (counterResets[e, c] == ResetState.Requested && ResetConfirmed(extensions[e], c))
+                {
+                    counterResets[e, c] = ResetState.Confirmed;
+                }
+            }
+        }
+    }
+
+    /// <summary>Whether the firmware echoes the current counter reset id.</summary>
+    private static bool ResetConfirmed(Extension extension, int counter) =>
+        extension.Input.GetResetCounter(counter) == extension.Output.CounterResetCommandId[counter];
+
+    /// <summary>
+    /// Runs a motor command on the extension and forgets the pending reports of the motors it gave a new command.
+    /// </summary>
+    private void MotorCommand(ExtensionIndex index, Action<Extension> command)
+    {
+        Extension extension = Get(index);
+        ushort[] ids = (ushort[])extension.Output.MotorCommandId.Clone();
+        command(extension);
+        for (int m = 0; m < Extension.Motors; m++)
+        {
+            motorPending[(int)index, m] &= extension.Output.MotorCommandId[m] == ids[m];
+        }
+    }
 
     private Extension Get(ExtensionIndex index) => extensions[(int)index];
 

@@ -59,8 +59,8 @@ int main(int argc, char* argv[])
                       << extension.macAddress << '\n';
         }
 
-        // ft.setMotorSync(ExtensionIndex::Slave1, Motor::M1, Motor::M3, 512);
-        // ft.setMotorDistance(ExtensionIndex::Slave1, Motor::M1, -512, 200);
+        // ft.startMotorSync(ExtensionIndex::Slave1, Motor::M3, Motor::M1, 512);
+        // ft.startMotorDistance(ExtensionIndex::Slave1, Motor::M1, -512, 200);
 
         ft.extension(ExtensionIndex::Slave1).output.motorMasterValues[static_cast<std::size_t>(Motor::M1)] =
             static_cast<std::uint8_t>(static_cast<int>(Motor::M3) + 1);
@@ -84,7 +84,7 @@ int main(int argc, char* argv[])
 
                 if (ft.digitalValue(ExtensionIndex::Local, UniversalInput::I8))
                 {
-                    ft.setMotorDistance(ExtensionIndex::Slave1, Motor::M1, -512, 200);
+                    ft.startMotorDistance(ExtensionIndex::Slave1, Motor::M1, -512, 200);
                 }
             }
         }

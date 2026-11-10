@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <array>
 #include <cstdio>
+#include <optional>
 #include <string_view>
 #include <utility>
 
@@ -10,6 +11,7 @@
 #include <imgui_internal.h> // DockBuilder and BeginViewportSideBar
 #include <misc/cpp/imgui_stdlib.h>
 
+#include "ftrobotx/Sensors.hpp"
 #include "ftrobotx/SerialPort.hpp"
 
 namespace
@@ -23,13 +25,20 @@ struct ModeChoice
 {
     ftrobotx::InputMode mode;
     const char* label;
+    bool ntc; // analog resistance, shown as temperature
 };
 
 constexpr std::array kInputModes{
-    ModeChoice{ftrobotx::InputMode::Voltage, "Voltage"},
-    ModeChoice{ftrobotx::InputMode::Resistance, "Resistance"},
-    ModeChoice{ftrobotx::InputMode::Ultrasonic, "Ultrasonic"},
+    ModeChoice{ftrobotx::InputMode::Voltage, "Voltage", false},
+    ModeChoice{ftrobotx::InputMode::Resistance, "Resistance", false},
+    ModeChoice{ftrobotx::InputMode::Resistance,
+               "NTC (\xC2\xB0"
+               "C)",
+               true}, // explicit UTF-8, also for MSVC
+    ModeChoice{ftrobotx::InputMode::Ultrasonic, "Ultrasonic", false},
 };
+
+constexpr const char* kMotorNames[] = {"M1", "M2", "M3", "M4"};
 
 /// Value of a universal input in the unit of its mode, with the limits from ROBO_TX_FW.h.
 struct InputReading
@@ -38,12 +47,24 @@ struct InputReading
     float fraction;
 };
 
-InputReading readInput(ftrobotx::UniversalInputConfig config, std::uint16_t value)
+InputReading readInput(ftrobotx::UniversalInputConfig config, bool ntc, std::uint16_t value)
 {
-    char buffer[32];
+    char buffer[48];
     if (config.digital)
     {
         return {value != 0 ? "1" : "0", value != 0 ? 1.0f : 0.0f};
+    }
+    if (ntc && config.mode == ftrobotx::InputMode::Resistance)
+    {
+        if (std::optional<double> celsius = ftrobotx::ntcCelsius(value))
+        {
+            std::snprintf(buffer, sizeof(buffer),
+                          "%.1f \xC2\xB0"
+                          "C  (%u Ohm)",
+                          *celsius, value);
+            return {buffer, std::clamp(static_cast<float>(*celsius + 20.0) / 100.0f, 0.0f, 1.0f)}; // -20 ... 80 °C
+        }
+        return {value == 0 ? "waiting for a value" : "no sensor", 0.0f};
     }
     switch (config.mode)
     {
@@ -62,16 +83,21 @@ InputReading readInput(ftrobotx::UniversalInputConfig config, std::uint16_t valu
         std::snprintf(buffer, sizeof(buffer), "%u Ohm", value);
         return {buffer, value / 4999.0f};
     case ftrobotx::InputMode::Ultrasonic:
-        if (value == 4096)
+        if (std::optional<std::uint16_t> cm = ftrobotx::ultrasonicCm(value))
+        {
+            std::snprintf(buffer, sizeof(buffer), "%u cm", *cm);
+            return {buffer, *cm / static_cast<float>(ftrobotx::kUltrasonicMax)};
+        }
+        if (value == ftrobotx::kUltrasonicNotPresent)
         {
             return {"no sensor", 0.0f};
         }
-        if (value >= 1024)
+        if (value == ftrobotx::kUltrasonicOverload)
         {
-            return {"overrun", 1.0f};
+            return {"nothing in range", 1.0f};
         }
-        std::snprintf(buffer, sizeof(buffer), "%u cm", value);
-        return {buffer, value / 1023.0f};
+        std::snprintf(buffer, sizeof(buffer), value == 0 ? "waiting for a value" : "%u (invalid)", value);
+        return {buffer, 0.0f};
     default:
         std::snprintf(buffer, sizeof(buffer), "%u", value);
         return {buffer, 0.0f};
@@ -407,7 +433,7 @@ void App::drawController(std::size_t index, ftrobotx::Extension& extension, bool
     bool configChanged = false;
 
     auto drawLeft = [&] {
-        drawInputs(extension, configChanged);
+        drawInputs(index, extension, configChanged);
         drawCounters(extension, outputChanged, configChanged);
         ImGui::SeparatorText("Display");
         ImGui::Text("Buttons: left %u ms, right %u ms", extension.input.displayButtonLeft(),
@@ -420,7 +446,7 @@ void App::drawController(std::size_t index, ftrobotx::Extension& extension, bool
     if (!twoColumns)
     {
         drawLeft();
-        drawOutputs(extension, outputChanged, configChanged);
+        drawOutputs(index, extension, outputChanged, configChanged);
     }
     // The table spans the remaining height, so the divider between the columns reaches the bottom.
     else if (ImGui::BeginTable("layout", 2, ImGuiTableFlags_Resizable | ImGuiTableFlags_BordersInnerV,
@@ -429,7 +455,7 @@ void App::drawController(std::size_t index, ftrobotx::Extension& extension, bool
         ImGui::TableNextColumn();
         drawLeft();
         ImGui::TableNextColumn();
-        drawOutputs(extension, outputChanged, configChanged);
+        drawOutputs(index, extension, outputChanged, configChanged);
         ImGui::EndTable();
     }
 
@@ -445,13 +471,18 @@ void App::drawController(std::size_t index, ftrobotx::Extension& extension, bool
     ImGui::PopID();
 }
 
+App::ControllerUi& App::ui(std::size_t index)
+{
+    if (controllerUi_.size() <= index)
+    {
+        controllerUi_.resize(index + 1);
+    }
+    return controllerUi_[index];
+}
+
 void App::drawMessage(std::size_t index)
 {
-    if (messages_.size() <= index)
-    {
-        messages_.resize(index + 1);
-    }
-    std::string& text = messages_[index];
+    std::string& text = ui(index).message;
 
     const ImGuiStyle& style = ImGui::GetStyle();
     float buttons = ImGui::CalcTextSize("ShowClear").x + style.FramePadding.x * 4 + style.ItemSpacing.x * 2;
@@ -474,8 +505,9 @@ void App::drawMessage(std::size_t index)
     }
 }
 
-void App::drawInputs(ftrobotx::Extension& extension, bool& configChanged)
+void App::drawInputs(std::size_t index, ftrobotx::Extension& extension, bool& configChanged)
 {
+    std::array<bool, ftrobotx::kUniversalInputs>& ntc = ui(index).ntc;
     ImGui::SeparatorText("Universal inputs");
     if (!ImGui::BeginTable("inputs", 4, ImGuiTableFlags_SizingFixedFit | ImGuiTableFlags_RowBg))
     {
@@ -497,20 +529,23 @@ void App::drawInputs(ftrobotx::Extension& extension, bool& configChanged)
         ImGui::Text("I%zu", i + 1);
 
         ImGui::TableNextColumn();
+        bool showNtc = ntc[i] && config.mode == ftrobotx::InputMode::Resistance && !config.digital;
+        auto isCurrent = [&](const ModeChoice& choice) { return choice.mode == config.mode && choice.ntc == showNtc; };
         const char* current = "?";
         for (const ModeChoice& choice : kInputModes)
         {
-            current = choice.mode == config.mode ? choice.label : current;
+            current = isCurrent(choice) ? choice.label : current;
         }
         ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
         if (ImGui::BeginCombo("##mode", current))
         {
             for (const ModeChoice& choice : kInputModes)
             {
-                if (ImGui::Selectable(choice.label, choice.mode == config.mode))
+                if (ImGui::Selectable(choice.label, isCurrent(choice)))
                 {
                     config.mode = choice.mode;
-                    config.digital = config.digital && choice.mode != ftrobotx::InputMode::Ultrasonic;
+                    config.digital = config.digital && choice.mode != ftrobotx::InputMode::Ultrasonic && !choice.ntc;
+                    ntc[i] = choice.ntc;
                     extension.config.setUniversalInputConfig(i, config);
                     configChanged = true;
                 }
@@ -519,7 +554,7 @@ void App::drawInputs(ftrobotx::Extension& extension, bool& configChanged)
         }
 
         ImGui::TableNextColumn();
-        ImGui::BeginDisabled(config.mode == ftrobotx::InputMode::Ultrasonic);
+        ImGui::BeginDisabled(config.mode == ftrobotx::InputMode::Ultrasonic || showNtc);
         if (ImGui::Checkbox("##digital", &config.digital))
         {
             extension.config.setUniversalInputConfig(i, config);
@@ -528,7 +563,7 @@ void App::drawInputs(ftrobotx::Extension& extension, bool& configChanged)
         ImGui::EndDisabled();
 
         ImGui::TableNextColumn();
-        InputReading reading = readInput(config, extension.input.universalInput(i));
+        InputReading reading = readInput(config, showNtc, extension.input.universalInput(i));
         ImGui::ProgressBar(reading.fraction, ImVec2(-1, 0), reading.text.c_str());
 
         ImGui::PopID();
@@ -589,92 +624,94 @@ void App::drawCounters(ftrobotx::Extension& extension, bool& outputChanged, bool
     ImGui::EndTable();
 }
 
-void App::drawOutputs(ftrobotx::Extension& extension, bool& outputChanged, bool& configChanged)
+void App::drawOutputs(std::size_t index, ftrobotx::Extension& extension, bool& outputChanged, bool& configChanged)
 {
     ftrobotx::Output& output = extension.output;
     const ImGuiStyle& style = ImGui::GetStyle();
+    ControllerUi& settings = ui(index);
 
     for (std::size_t m = 0; m < ftrobotx::kMotors; ++m)
     {
         ImGui::PushID(static_cast<int>(m));
-        std::int16_t& first = output.pwmOutputValues[2 * m];
-        std::int16_t& second = output.pwmOutputValues[2 * m + 1];
         bool motorMode = extension.config.motorConfig(m) != 0;
 
         char title[32];
         std::snprintf(title, sizeof(title), "M%zu  /  O%zu, O%zu", m + 1, 2 * m + 1, 2 * m + 2);
         ImGui::SeparatorText(title);
 
+        // Switching ends a distance/synchronization command, so the firmware doesn't hold a partner motor.
         if (ImGui::RadioButton("Motor", motorMode) && !motorMode)
         {
             extension.config.setMotorConfig(m, 1);
-            output.stopMotor(m);
+            extension.setMotorOutput(m, 0);
             configChanged = outputChanged = true;
         }
         ImGui::SameLine();
         if (ImGui::RadioButton("Two outputs", !motorMode) && motorMode)
         {
             extension.config.setMotorConfig(m, 0);
-            output.stopMotor(m);
+            extension.setMotorOutput(m, 0);
             configChanged = outputChanged = true;
         }
 
         if (motorMode)
         {
-            int speed = first - second;
+            std::optional<std::size_t> partner = extension.syncPartner(m);
+            if (partner)
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(kGreen, "synchronized with %s", kMotorNames[*partner]);
+            }
+
+            int speed = output.pwmOutputValues[2 * m] - output.pwmOutputValues[2 * m + 1];
             ImGui::SetNextItemWidth(-ImGui::CalcTextSize("Stop").x - style.ItemSpacing.x * 2 -
                                     style.FramePadding.x * 2);
             if (ImGui::SliderInt("##speed", &speed, -512, 512, "%d"))
             {
-                first = static_cast<std::int16_t>(std::max(speed, 0));
-                second = static_cast<std::int16_t>(std::max(-speed, 0));
-                if (output.motorDistanceValues[m] != 0)
-                {
-                    ++output.motorCommandId[m]; // a running distance command only picks up new speeds this way
-                }
+                extension.setMotorOutput(m, static_cast<std::int16_t>(speed));
                 outputChanged = true;
             }
-            ImGui::SetItemTooltip("Speed and direction, -512 ... 512. Ctrl+click to type a value.");
+            ImGui::SetItemTooltip("Speed and direction, -512 ... 512. Ctrl+click to type a value.\n"
+                                  "Ends a distance or synchronization command; a synchronized motor stops.");
             ImGui::SameLine();
             if (ImGui::Button("Stop"))
             {
-                output.stopMotor(m);
+                extension.stopMotor(m);
                 outputChanged = true;
             }
 
-            if (ImGui::TreeNode("Distance / synchronization"))
+            if (ImGui::TreeNode("Distance"))
             {
-                int distance = output.motorDistanceValues[m];
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
-                if (ImGui::InputInt("Distance (counter steps, 0 = endless)", &distance))
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+                ImGui::SliderInt("Speed", &settings.distanceSpeed[m], -512, 512, "%d");
+                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+                if (ImGui::InputInt("Counter pulses", &settings.distance[m]))
                 {
-                    output.motorDistanceValues[m] = static_cast<std::uint16_t>(std::clamp(distance, 0, 65535));
-                    outputChanged = true;
+                    settings.distance[m] = std::clamp(settings.distance[m], 1, 65535);
                 }
-
-                constexpr const char* kSyncTargets[] = {"None", "M1", "M2", "M3", "M4"};
-                int master = std::min<int>(output.motorMasterValues[m], 4);
-                ImGui::SetNextItemWidth(ImGui::GetFontSize() * 8);
-                if (ImGui::Combo("Synchronize with", &master, kSyncTargets, 5))
-                {
-                    output.motorMasterValues[m] = static_cast<std::uint8_t>(master);
-                    outputChanged = true;
-                }
-
+                ImGui::BeginDisabled(settings.distanceSpeed[m] == 0);
                 if (ImGui::Button("Start"))
                 {
-                    ++output.motorCommandId[m];
+                    extension.startMotorDistance(m, static_cast<std::int16_t>(settings.distanceSpeed[m]),
+                                                 static_cast<std::uint16_t>(settings.distance[m]));
                     outputChanged = true;
                 }
-                ImGui::SetItemTooltip("Sends speed, distance and synchronization as one motor command");
+                ImGui::EndDisabled();
+                ImGui::SetItemTooltip("Runs the motor for the given number of pulses on C%zu, then the TX brakes it. "
+                                      "Resets the counter.",
+                                      m + 1);
                 ImGui::SameLine();
-                if (extension.input.motorReachedDestination(m) != 0)
+                if (output.motorDistanceValues[m] == 0 || partner)
+                {
+                    ImGui::TextDisabled("No distance command");
+                }
+                else if (extension.motorCommandDone(m))
                 {
                     ImGui::TextColored(kGreen, "Target reached");
                 }
                 else
                 {
-                    ImGui::TextDisabled("Target not reached");
+                    ImGui::TextUnformatted("Running...");
                 }
                 ImGui::TreePop();
             }
@@ -698,4 +735,105 @@ void App::drawOutputs(ftrobotx::Extension& extension, bool& outputChanged, bool&
 
         ImGui::PopID();
     }
+
+    drawSync(index, extension, outputChanged);
+}
+
+void App::drawSync(std::size_t index, ftrobotx::Extension& extension, bool& outputChanged)
+{
+    ControllerUi& settings = ui(index);
+    ImGui::SeparatorText("Synchronized motors");
+    ImGui::PushID("sync");
+
+    float comboWidth = ImGui::GetFontSize() * 4;
+    ImGui::AlignTextToFramePadding();
+    ImGui::TextUnformatted("Master");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(comboWidth);
+    ImGui::Combo("##master", &settings.syncMaster, kMotorNames, 4);
+    ImGui::SameLine();
+    ImGui::TextUnformatted("Slave");
+    ImGui::SameLine();
+    ImGui::SetNextItemWidth(comboWidth);
+    ImGui::Combo("##slave", &settings.syncSlave, kMotorNames, 4);
+    ImGui::SameLine();
+    ImGui::Checkbox("Opposite direction", &settings.syncOpposite);
+    ImGui::SetItemTooltip("The slave turns the other way, e.g. to turn a robot on the spot");
+
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    ImGui::SliderInt("Speed", &settings.syncSpeed, -512, 512, "%d");
+    ImGui::SetNextItemWidth(ImGui::GetFontSize() * 10);
+    if (ImGui::InputInt("Counter pulses (0 = endless)", &settings.syncDistance))
+    {
+        settings.syncDistance = std::clamp(settings.syncDistance, 0, 65535);
+    }
+
+    auto master = static_cast<std::size_t>(settings.syncMaster);
+    auto slave = static_cast<std::size_t>(settings.syncSlave);
+    const char* problem = nullptr;
+    if (master == slave)
+    {
+        problem = "Choose two different motors";
+    }
+    else if (extension.config.motorConfig(master) == 0 || extension.config.motorConfig(slave) == 0)
+    {
+        problem = "Both must be set to Motor";
+    }
+    else if (settings.syncSpeed == 0)
+    {
+        problem = "Choose a speed";
+    }
+
+    ImGui::BeginDisabled(problem != nullptr);
+    if (ImGui::Button("Start"))
+    {
+        extension.startMotorSync(master, slave, static_cast<std::int16_t>(settings.syncSpeed),
+                                 static_cast<std::uint16_t>(settings.syncDistance),
+                                 settings.syncOpposite ? ftrobotx::SyncDirection::Opposite
+                                                       : ftrobotx::SyncDirection::Same);
+        outputChanged = true;
+    }
+    ImGui::EndDisabled();
+    ImGui::SetItemTooltip("The TX keeps both counters equal by holding back the faster motor. Each motor needs its "
+                          "encoder on the counter with the same number. Resets both counters.");
+    ImGui::SameLine();
+    bool running = problem == nullptr && extension.syncPartner(master) == slave;
+    ImGui::BeginDisabled(!running);
+    if (ImGui::Button("Stop"))
+    {
+        extension.stopMotor(master); // stops the slave too
+        outputChanged = true;
+    }
+    ImGui::EndDisabled();
+
+    ImGui::SameLine();
+    if (problem != nullptr)
+    {
+        ImGui::TextDisabled("%s", problem);
+    }
+    else
+    {
+        int masterCount = extension.input.counterValue(master);
+        int slaveCount = extension.input.counterValue(slave);
+        if (!running)
+        {
+            ImGui::TextDisabled("Not running");
+        }
+        else if (extension.output.motorDistanceValues[master] == 0)
+        {
+            ImGui::TextUnformatted("Running (endless)");
+        }
+        else if (extension.motorCommandDone(master) && extension.motorCommandDone(slave))
+        {
+            ImGui::TextColored(kGreen, "Target reached");
+        }
+        else
+        {
+            ImGui::TextUnformatted("Running...");
+        }
+        ImGui::Text("C%zu = %d, C%zu = %d, difference %d", master + 1, masterCount, slave + 1, slaveCount,
+                    masterCount - slaveCount);
+    }
+
+    ImGui::PopID();
 }

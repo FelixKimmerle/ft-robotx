@@ -1,4 +1,5 @@
 cmake_minimum_required(VERSION 3.28)
+set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 project(FtRoboTx
     VERSION 1.0.0
@@ -20,6 +21,7 @@ function(ftrobotx_set_warnings target)
 endfunction()
 
 add_library(ftrobotx
+    src/Extension.cpp
     src/FtConnection.cpp
     src/Packets.cpp
 )
@@ -53,6 +55,15 @@ if(FT_BUILD_EXAMPLES)
 
     add_executable(ftrobotx_message examples/message.cpp)
     target_link_libraries(ftrobotx_message PRIVATE ftrobotx::ftrobotx)
+
+    add_executable(ftrobotx_motor_sync examples/motor_sync.cpp)
+    target_link_libraries(ftrobotx_motor_sync PRIVATE ftrobotx::ftrobotx)
+
+    add_executable(ftrobotx_motor_measure examples/motor_measure.cpp)
+    target_link_libraries(ftrobotx_motor_measure PRIVATE ftrobotx::ftrobotx)
+
+    add_executable(ftrobotx_sensors examples/sensors.cpp)
+    target_link_libraries(ftrobotx_sensors PRIVATE ftrobotx::ftrobotx)
 endif()
 
 if(FT_BUILD_TESTS)

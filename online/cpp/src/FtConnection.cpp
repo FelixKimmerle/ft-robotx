@@ -38,6 +38,28 @@ bool traceEnabled()
 /// measured), so the first reply gets more time than the rest.
 constexpr std::chrono::milliseconds kFirstReplyTimeout{10000};
 
+/// Whether the firmware echoes the current counter reset id.
+bool resetConfirmed(const Extension& extension, std::size_t counter)
+{
+    return extension.input.resetCounter(counter) == extension.output.counterResetCommandId.at(counter);
+}
+
+/// Whether the firmware echoes all current motor command and counter reset ids.
+bool idsTakenOver(const Extension& extension)
+{
+    for (std::size_t i = 0; i < kMotors; ++i)
+    {
+        if (!extension.motorCommandDone(i) || !resetConfirmed(extension, i))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+/// Longest wait for the firmware to take over the command ids of a new connection.
+constexpr std::chrono::milliseconds kSettleTimeout{500};
+
 } // namespace
 
 FtConnection::FtConnection(const std::string& portName, std::size_t numExtensions, std::chrono::milliseconds timeout)
@@ -67,6 +89,17 @@ FtConnection::FtConnection(const std::string& portName, std::size_t numExtension
     RequestInfoPacket infoPacket(extensions_);
     RequestInfoResponse infoResponse(extensions_);
     sendPacket(infoPacket, infoResponse);
+
+    // The firmware confirms motor commands and counter resets by echoing their ids. Until it has seen our ids
+    // (starting at 0), it still echoes those of an earlier connection, which could pass for a confirmation of our
+    // first command. It takes a few milliseconds; this also stops motors still running from an earlier connection.
+    motorPending_.assign(numExtensions, {});
+    counterResets_.assign(numExtensions, {});
+    auto settleEnd = std::chrono::steady_clock::now() + kSettleTimeout;
+    do
+    {
+        exchange();
+    } while (!std::ranges::all_of(extensions_, idsTakenOver) && std::chrono::steady_clock::now() < settleEnd);
 }
 
 void FtConnection::setPwmOutput(ExtensionIndex index, PWM pwm, std::int16_t duty)
@@ -74,31 +107,49 @@ void FtConnection::setPwmOutput(ExtensionIndex index, PWM pwm, std::int16_t duty
     extension(index).output.pwmOutputValues.at(static_cast<std::size_t>(pwm)) = duty;
 }
 
+template <typename Command> void FtConnection::motorCommand(ExtensionIndex index, Command command)
+{
+    Extension& ext = extension(index);
+    std::array<std::uint16_t, kMotors> ids = ext.output.motorCommandId;
+    command(ext);
+    // A motor with a new command no longer has the old one to report; a started one is marked by the caller.
+    auto& pending = motorPending_.at(static_cast<std::size_t>(index));
+    for (std::size_t m = 0; m < kMotors; ++m)
+    {
+        pending[m] = pending[m] && ext.output.motorCommandId[m] == ids[m];
+    }
+}
+
 void FtConnection::setMotorOutput(ExtensionIndex index, Motor motor, std::int16_t duty)
 {
-    auto& pwm = extension(index).output.pwmOutputValues;
-    auto m = static_cast<std::size_t>(motor);
-    pwm.at(2 * m) = duty > 0 ? duty : std::int16_t{0};
-    pwm.at(2 * m + 1) = duty > 0 ? std::int16_t{0} : static_cast<std::int16_t>(-duty);
+    motorCommand(index, [&](Extension& ext) { ext.setMotorOutput(static_cast<std::size_t>(motor), duty); });
 }
 
-void FtConnection::setMotorDistance(ExtensionIndex index, Motor motor, std::int16_t duty, std::uint16_t distance)
+void FtConnection::startMotorDistance(ExtensionIndex index, Motor motor, std::int16_t duty, std::uint16_t distance)
 {
-    setMotorOutput(index, motor, duty);
-    Output& output = extension(index).output;
     auto m = static_cast<std::size_t>(motor);
-    output.motorDistanceValues.at(m) = distance;
-    ++output.motorCommandId.at(m);
+    motorCommand(index, [&](Extension& ext) { ext.startMotorDistance(m, duty, distance); });
+    motorPending_.at(static_cast<std::size_t>(index)).at(m) = distance != 0;
 }
 
-void FtConnection::setMotorSync(ExtensionIndex index, Motor motor, Motor other, std::int16_t duty,
-                                std::uint16_t /*distance*/)
+void FtConnection::startMotorSync(ExtensionIndex index, Motor master, Motor slave, std::int16_t duty,
+                                  std::uint16_t distance, SyncDirection direction)
 {
-    setMotorOutput(index, motor, duty);
-    setMotorOutput(index, other, duty);
+    auto m = static_cast<std::size_t>(master);
+    auto s = static_cast<std::size_t>(slave);
+    motorCommand(index, [&](Extension& ext) { ext.startMotorSync(m, s, duty, distance, direction); });
+    auto& pending = motorPending_.at(static_cast<std::size_t>(index));
+    pending.at(m) = pending.at(s) = distance != 0;
+}
 
-    extension(index).output.motorMasterValues.at(static_cast<std::size_t>(motor)) =
-        static_cast<std::uint8_t>(static_cast<int>(other) + 1);
+void FtConnection::stopMotor(ExtensionIndex index, Motor motor)
+{
+    motorCommand(index, [&](Extension& ext) { ext.stopMotor(static_cast<std::size_t>(motor)); });
+}
+
+bool FtConnection::motorCommandDone(ExtensionIndex index, Motor motor) const
+{
+    return extension(index).motorCommandDone(static_cast<std::size_t>(motor));
 }
 
 void FtConnection::showMessage(ExtensionIndex index, std::string_view text)
@@ -130,7 +181,19 @@ std::array<bool, 8> FtConnection::extensionsOnline()
 
 void FtConnection::resetCounter(ExtensionIndex index, Counter counter)
 {
-    ++extension(index).output.counterResetCommandId.at(static_cast<std::size_t>(counter));
+    auto c = static_cast<std::size_t>(counter);
+    ++extension(index).output.counterResetCommandId.at(c);
+    counterResets_.at(static_cast<std::size_t>(index)).at(c) = ResetState::Requested;
+}
+
+bool FtConnection::counterResetDone(ExtensionIndex index, Counter counter) const
+{
+    return counterResets_.at(static_cast<std::size_t>(index)).at(static_cast<std::size_t>(counter)) == ResetState::Done;
+}
+
+std::uint16_t FtConnection::counterValue(ExtensionIndex index, Counter counter) const
+{
+    return extension(index).input.counterValue(static_cast<std::size_t>(counter));
 }
 
 void FtConnection::stopAllOutputs()
@@ -139,6 +202,25 @@ void FtConnection::stopAllOutputs()
     {
         extension.output.stopAll();
     }
+    for (auto& pending : motorPending_)
+    {
+        pending.fill(false);
+    }
+}
+
+void FtConnection::setInputMode(ExtensionIndex index, UniversalInput input, InputMode mode, bool digital)
+{
+    extension(index).config.setUniversalInputConfig(static_cast<std::size_t>(input), {mode, digital});
+}
+
+std::optional<double> FtConnection::ntcTemperature(ExtensionIndex index, UniversalInput input, double r25, double b)
+{
+    return ntcCelsius(analogValue(index, input), r25, b);
+}
+
+std::optional<std::uint16_t> FtConnection::ultrasonicDistance(ExtensionIndex index, UniversalInput input)
+{
+    return ultrasonicCm(analogValue(index, input));
 }
 
 bool FtConnection::digitalValue(ExtensionIndex index, UniversalInput input)
@@ -158,9 +240,51 @@ void FtConnection::update()
         sendConfig();
     }
 
+    exchange();
+    notify();
+}
+
+void FtConnection::exchange()
+{
     OutputPacket outputPacket(extensions_);
     InputResponse inputResponse(extensions_);
     sendPacket(outputPacket, inputResponse);
+}
+
+void FtConnection::notify()
+{
+    for (std::size_t e = 0; e < extensions_.size(); ++e)
+    {
+        auto index = static_cast<ExtensionIndex>(e);
+        // Cleared before the call, so the callback can start the next command.
+        for (std::size_t m = 0; m < kMotors; ++m)
+        {
+            if (motorPending_[e][m] && extensions_[e].motorCommandDone(m))
+            {
+                motorPending_[e][m] = false;
+                if (motorReachedCallback_)
+                {
+                    motorReachedCallback_(index, static_cast<Motor>(m));
+                }
+            }
+        }
+        for (std::size_t c = 0; c < kMotors; ++c)
+        {
+            ResetState& state = counterResets_[e][c];
+            if (state == ResetState::Confirmed)
+            {
+                state = ResetState::Done;
+                if (counterResetCallback_)
+                {
+                    counterResetCallback_(index, static_cast<Counter>(c));
+                }
+            }
+            else if (state == ResetState::Requested && resetConfirmed(extensions_[e], c))
+            {
+                state = ResetState::Confirmed;
+            }
+        }
+    }
 }
 
 void FtConnection::sendConfig()

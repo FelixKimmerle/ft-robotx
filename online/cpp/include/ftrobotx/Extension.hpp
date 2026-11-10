@@ -63,6 +63,13 @@ enum class UniversalInput
     I8,
 };
 
+/// Direction of the slave motor in a synchronized motor command, relative to the master.
+enum class SyncDirection
+{
+    Same,
+    Opposite,
+};
+
 enum class InputMode : std::uint8_t
 {
     Voltage,
@@ -241,13 +248,15 @@ struct Output
     std::array<std::uint16_t, kMotors> motorDistanceValues{};
     std::array<std::uint16_t, kMotors> motorCommandId{};
 
-    /// Stops a motor like ftMscLib's StopMotorExCmd: duty and distance to 0, and a new motor command, so a
-    /// running distance/synchronization command is cancelled too.
+    /// Stops a motor like ftMscLib's StopMotorExCmd: duty, distance and synchronization to 0, and a new motor
+    /// command, so a running distance/synchronization command is cancelled too. A motor synchronized with this one
+    /// is held by the firmware then; FtConnection::stopMotor() stops both.
     void stopMotor(std::size_t motor)
     {
         pwmOutputValues.at(2 * motor) = 0;
         pwmOutputValues.at(2 * motor + 1) = 0;
         motorDistanceValues.at(motor) = 0;
+        motorMasterValues.at(motor) = 0;
         ++motorCommandId.at(motor);
     }
 
@@ -277,6 +286,28 @@ struct Extension
     Config config;
     Output output;
     Input input;
+
+    // Motor commands on the output values; FtConnection has the same functions by ExtensionIndex and Motor, and
+    // documents them. These are for code that works on an Extension directly, like the test tool.
+    void setMotorOutput(std::size_t motor, std::int16_t duty);
+    void startMotorDistance(std::size_t motor, std::int16_t duty, std::uint16_t distance);
+    void startMotorSync(std::size_t master, std::size_t slave, std::int16_t duty, std::uint16_t distance = 0,
+                        SyncDirection direction = SyncDirection::Same);
+    void stopMotor(std::size_t motor);
+
+    /// The motor synchronized with this one (as master or slave), if any.
+    [[nodiscard]] std::optional<std::size_t> syncPartner(std::size_t motor) const;
+
+    /// Whether the motor finished its last distance command, i.e. the firmware confirmed the current motor command
+    /// id. Also true for commands without distance (they are confirmed right away) and before the first command.
+    [[nodiscard]] bool motorCommandDone(std::size_t motor) const
+    {
+        return input.motorReachedDestination(motor) == output.motorCommandId.at(motor);
+    }
+
+  private:
+    /// Ends the distance/synchronization command of a motor and stops the motors synchronized with it.
+    void releaseMotor(std::size_t motor);
 };
 
 } // namespace ftrobotx

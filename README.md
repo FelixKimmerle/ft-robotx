@@ -194,6 +194,9 @@ Ctrl+C stops the programs, and they switch all outputs off before exiting.
 | Button and lamp | [`ftrobotx_button_lamp`](online/cpp/examples/button_lamp.cpp) | [`examples/ButtonLamp`](online/cs/examples/ButtonLamp/Program.cs) | Lamp on O1 lights while the button on I1 is pressed |
 | Extension test | [`ftrobotx_extension_test`](online/cpp/examples/extension_test.cpp) | [`examples/ExtensionTest`](online/cs/examples/ExtensionTest/Program.cs) | Master and extension 1 with button on I1 and lamp on O1 each, crosswise: each button switches the *other* controller's lamp |
 | Display message | [`ftrobotx_message`](online/cpp/examples/message.cpp) | – | Shows a text on a controller's display, or clears it |
+| Synchronized motors | [`ftrobotx_motor_sync`](online/cpp/examples/motor_sync.cpp) | [`examples/MotorSync`](online/cs/examples/MotorSync/Program.cs) | Encoder motors on M1/C1 and M2/C2 run synchronized back and forth; the button on I1 starts and stops them. C++: `-d` speed, `-n` pulses each way, `-o` opposite directions |
+| Sensors | [`ftrobotx_sensors`](online/cpp/examples/sensors.cpp) | [`examples/Sensors`](online/cs/examples/Sensors/Program.cs) | Distance from the ultrasonic sensor on I2 and temperature from the NTC on I3 |
+| Motor measurement | [`ftrobotx_motor_measure`](online/cpp/examples/motor_measure.cpp) | [`examples/MotorMeasure`](online/cs/examples/MotorMeasure/Program.cs) | Speed of the encoder motors on M1/C1 and M2/C2 at four duties, on their own and synchronized |
 | Demo | [`ftrobotx_demo`](online/cpp/examples/main.cpp) | [`src/Program.cs`](online/cs/src/Program.cs) | The original demo: motor control with master and one extension |
 
 Running them:
@@ -327,6 +330,70 @@ bool extension1 = tx.GetExtensionsOnline()[0];  // is extension 1 connected to t
 
 Every change takes effect with the next `update()` / `Update()`. Call it regularly: the TX refreshes its I/O
 every 10 ms.
+
+#### Sensors
+
+The values of the universal inputs depend on their mode. `setInputMode()` sets it (sent with the next `update()`);
+right after that, the input reads 0 until the first measurement (about 0.3 s for the ultrasonic sensor and the NTC).
+
+| Sensor | Mode | Value |
+| ------ | ---- | ----- |
+| Button, phototransistor (digital) | `InputMode::Resistance`, digital | 0 or 1 |
+| NTC, photoresistor, potentiometer | `InputMode::Resistance` | 10 … 4999 Ω; 5000 = overload (nothing connected) |
+| Color sensor, trail sensor | `InputMode::Voltage` | mV (digital: 0 or 1) |
+| Ultrasonic distance sensor | `InputMode::Ultrasonic` | 2 … 1023 cm; 1024 = nothing in range, 4096 = no sensor |
+
+```cpp
+tx.setInputMode(ExtensionIndex::Local, UniversalInput::I2, InputMode::Ultrasonic);
+tx.setInputMode(ExtensionIndex::Local, UniversalInput::I3, InputMode::Resistance);
+tx.update();
+std::optional<std::uint16_t> cm = tx.ultrasonicDistance(ExtensionIndex::Local, UniversalInput::I2);
+std::optional<double> celsius = tx.ntcTemperature(ExtensionIndex::Local, UniversalInput::I3);
+std::optional<double> mine = tx.ntcTemperature(ExtensionIndex::Local, UniversalInput::I3, 1450.0, 3950.0);
+```
+
+Both return no value without a valid measurement. The NTC conversion uses the B parameter equation with
+fischertechnik's values as defaults, R₂₅ = 1.5 kΩ (resistance at 25 °C) and B = 3900 K. Every NTC differs a little;
+pass your own values to calibrate. The plain conversions (`ntcCelsius()`, `ntcKelvin()`, `ultrasonicCm()`) are in
+[`Sensors.hpp`](online/cpp/include/ftrobotx/Sensors.hpp). C#: `SetInputMode`, `GetUltrasonicDistance`,
+`GetNtcTemperature` and the static class `Sensors`.
+
+#### Encoder motors
+
+An encoder motor on M*n* needs its counter on C*n* (M1 on C1, ...). The counters count pulses in either direction;
+the [measurement example](online/cpp/examples/motor_measure.cpp) shows about 310 pulses per second at full speed.
+
+```cpp
+tx.startMotorDistance(ExtensionIndex::Local, Motor::M1, 400, 190);         // 190 pulses, then the TX brakes
+tx.startMotorSync(ExtensionIndex::Local, Motor::M1, Motor::M2, 400, 300); // M2 follows M1, both stop after 300
+tx.startMotorSync(ExtensionIndex::Local, Motor::M1, Motor::M2, 400, 0,    // endless; M2 turns the other way
+                  SyncDirection::Opposite);
+tx.setMotorReachedCallback([](ExtensionIndex, Motor motor) { /* called from update(), once per motor */ });
+bool done = tx.motorCommandDone(ExtensionIndex::Local, Motor::M1);         // or poll after update()
+std::uint16_t pulses = tx.counterValue(ExtensionIndex::Local, Counter::C1);
+tx.stopMotor(ExtensionIndex::Local, Motor::M1);                            // stops M2 too while they are synchronized
+```
+
+C#: `StartMotorDistance`, `StartMotorSync`, the events `MotorReached` and `CounterReset`, `IsMotorCommandDone`,
+`IsCounterResetDone`, `GetCounterValue` and `StopMotor`.
+
+What the TX does (measured with firmware 1.30, two encoder motors):
+
+- **Distance**: the motor stops exactly at the given number of pulses.
+- **Synchronized**: the firmware keeps both counters within a pulse or two by holding back the faster motor, in
+  either direction and with or without a distance. Both motors of a pair always get the same distance; with
+  different distances the pair would stop at the shorter one and the other motor would never report reaching its
+  target.
+- **Each new motor command resets the motor's counter.** That includes switching a motor from a distance or
+  synchronization command back to `setMotorOutput()`, and cancelling a running command with `stopMotor()`. A
+  motor driven by `setMotorOutput()` only, or one that already reached its target, keeps its counter on `stopMotor()`.
+- **Completion**: the TX confirms a motor command or counter reset by echoing its id (`motor_pos_reached`,
+  `cnt_resetted` in the transfer area are not plain flags). A command without distance is confirmed right away, so
+  only distance commands report through `motorCommandDone()` and the callback. After a counter reset, the counter
+  value follows one exchange after the confirmation; `counterResetDone()` and the callback wait for it.
+- **Speed changes** during a distance or synchronization command need a new command (and so reset the counter);
+  the library always starts one in `startMotorDistance()` / `startMotorSync()`.
+- Callbacks run inside `update()` on the caller's thread; they may start the next command right away.
 
 ## Offline mode: programs on the controller
 
